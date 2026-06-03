@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  🤖  ITX ROMEO BOT  v4.0  —  WhatsApp Bot + Dashboard + Telegram Logging
+//  🤖  ITX ROMEO BOT  v4.5  —  WhatsApp Bot + Dashboard + Telegram + Urdu
 // ═══════════════════════════════════════════════════════════════
 const {
   default: makeWASocket,
@@ -22,6 +22,25 @@ app.use(express.json());
 let sock       = null;
 let botStatus  = { connected: false, phone: '', uptime: null, msgCount: 0, lookupCount: 0 };
 
+// ── Anti-duplicate: recent lookups cache
+const recentLookups = new Map(); // number/cnic -> timestamp
+const DEDUPE_WINDOW = 30000; // 30 seconds mein same query block
+
+function isDuplicate(query) {
+  const clean = query.replace(/[^0-9]/g, '');
+  const last = recentLookups.get(clean);
+  if (last && (Date.now() - last) < DEDUPE_WINDOW) return true;
+  recentLookups.set(clean, Date.now());
+  // Clean old entries
+  if (recentLookups.size > 100) {
+    const now = Date.now();
+    for (const [k, v] of recentLookups) {
+      if (now - v > DEDUPE_WINDOW) recentLookups.delete(k);
+    }
+  }
+  return false;
+}
+
 // ── Settings
 const SETTINGS_FILE = './settings.json';
 let settings = {};
@@ -38,7 +57,7 @@ const TG_CHAT  = '6383817850';
 
 function sendTelegram(text) {
   return new Promise((resolve, reject) => {
-    const clean = text.replace(/[*_`]/g, ''); // basic markdown strip
+    const clean = text.replace(/[*_`]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const encoded = encodeURIComponent(clean);
     const url = `https://api.telegram.org/bot${TG_TOKEN}/sendMessage?chat_id=${TG_CHAT}&text=${encoded}&parse_mode=HTML`;
     
@@ -53,6 +72,239 @@ function sendTelegram(text) {
       reject(e);
     });
   });
+}
+
+// ═══════════════════════════════════════════════════
+//  🌐  URDU TRANSLITERATION MAP
+// ═══════════════════════════════════════════════════
+function toUrdu(text) {
+  if (!text) return 'N/A';
+  
+  const map = {
+    'MUHAMMAD': 'محمد',
+    'MUHAMAD': 'محمد',
+    'MOHAMMAD': 'محمد',
+    'MOHAMAD': 'محمد',
+    'AHMED': 'احمد',
+    'AHMAD': 'احمد',
+    'ALI': 'علی',
+    'HASSAN': 'حسن',
+    'HUSSAIN': 'حسین',
+    'HUSAIN': 'حسین',
+    'SAGHEER': 'صغیر',
+    'SAGHIR': 'صغیر',
+    'AKBAR': 'اکبر',
+    'ASGHAR': 'اصغر',
+    'ABBAS': 'عباس',
+    'ABDULLAH': 'عبداللہ',
+    'ABDUL': 'عبدل',
+    'REHMAN': 'رحمان',
+    'RAHMAN': 'رحمان',
+    'RAHEEM': 'رحیم',
+    'RAHIM': 'رحیم',
+    'KHAN': 'خان',
+    'MALIK': 'ملک',
+    'SIDDIQUE': 'صدیق',
+    'SIDDIQ': 'صدیق',
+    'FAROOQ': 'فاروق',
+    'FAROOQ': 'فاروق',
+    'USMAN': 'عثمان',
+    'OSMAN': 'عثمان',
+    'UMAR': 'عمر',
+    'OMAR': 'عمر',
+    'BILAL': 'بلال',
+    'IMRAN': 'عمران',
+    'NAWAZ': 'نواز',
+    'SHARIF': 'شریف',
+    'BHUTTO': 'بھٹو',
+    'IQBAL': 'اقبال',
+    'JAVED': 'جاوید',
+    'JAVEED': 'جاوید',
+    'JAVED': 'جاوید',
+    'SAEED': 'سعید',
+    'SAEED': 'سعید',
+    'RASHID': 'راشد',
+    'RASHEED': 'رشید',
+    'AMEEN': 'امین',
+    'AMIN': 'امین',
+    'NABEEL': 'نبیل',
+    'NABIL': 'نبیل',
+    'WAQAR': 'وقار',
+    'WAQAS': 'وقاص',
+    'SOHAIL': 'سہیل',
+    'SOHAIL': 'سہیل',
+    'DANISH': 'دانش',
+    'KAMRAN': 'کامران',
+    'IRFAN': 'عرفان',
+    'ARSLAN': 'ارسلان',
+    'ARSALAN': 'ارسلان',
+    'SHAHID': 'شاہد',
+    'ZAHID': 'زاہد',
+    'NASIR': 'ناصر',
+    'NASEER': 'نصیر',
+    'TARIQ': 'طارق',
+    'ASIF': 'آصف',
+    'ARIF': 'عارف',
+    'LATIF': 'لطیف',
+    'SHAFIQ': 'شفیق',
+    'RAFIQ': 'رفیق',
+    'MAQSOOD': 'مقصود',
+    'MASOOD': 'مسعود',
+    'MAQBOOL': 'مقبول',
+    'MAHMOOD': 'محمود',
+    'MEHMOOD': 'محمود',
+    'GHAFOOR': 'غفور',
+    'GHAFFAR': 'غفار',
+    'RIAZ': 'ریاض',
+    'NIAZ': 'نیاز',
+    'FAIZ': 'فیض',
+    'FAIZAN': 'فیضان',
+    'ADIL': 'عادل',
+    'ADEEL': 'عدیل',
+    'WAHEED': 'وحید',
+    'RASHEED': 'رشید',
+    'KHALID': 'خالد',
+    'KHALEEL': 'خلیل',
+    'JAMEEL': 'جمیل',
+    'JAMIL': 'جمیل',
+    'SALEEM': 'سلیم',
+    'SALIM': 'سلیم',
+    'SALMAN': 'سلمان',
+    'SULEMAN': 'سلیمان',
+    'SULAIMAN': 'سلیمان',
+    'YOUSAF': 'یوسف',
+    'YOUSUF': 'یوسف',
+    'YOUSAF': 'یوسف',
+    'IBRAHIM': 'ابراہیم',
+    'ISMAIL': 'اسماعیل',
+    'ISHAQ': 'اسحاق',
+    'YAQOOB': 'یعقوب',
+    'MOOSA': 'موسیٰ',
+    'MUSA': 'موسیٰ',
+    'HAROON': 'ہارون',
+    'HAROON': 'ہارون',
+    'ZAKARIA': 'زکریا',
+    'YAHYA': 'یحییٰ',
+    'EESA': 'عیسیٰ',
+    'ISA': 'عیسیٰ',
+    'FATIMA': 'فاطمہ',
+    'AISHA': 'عائشہ',
+    'AISHA': 'عائشہ',
+    'KHADIJA': 'خدیجہ',
+    'ZAINAB': 'زینب',
+    'MARYAM': 'مریم',
+    'AMNA': 'آمنہ',
+    'HALEEMA': 'حلیمہ',
+    'HALEEMA': 'حلیمہ',
+    'SAIMA': 'صائمہ',
+    'SAIMA': 'صائمہ',
+    'NADIA': 'نادیہ',
+    'SADIA': 'سعدیہ',
+    'SAIMA': 'صائمہ',
+    'SAMINA': 'ثمینہ',
+    'RUKHSANA': 'رخسانہ',
+    'RUBINA': 'روبینہ',
+    'SHAHNAZ': 'شہناز',
+    'PARVEEN': 'پروین',
+    'NASREEN': 'نسرین',
+    'YASMEEN': 'یاسمین',
+    'SHABANA': 'شبانہ',
+    'RAZIA': 'رضیہ',
+    'ROBINA': 'روبینہ',
+    'BUSHRA': 'بشریٰ',
+    'KANWAL': 'کنول',
+    'NOSHEEN': 'نوشین',
+    'NAHEED': 'ناہید',
+    'SHAHEEN': 'شاہین',
+    'TAHIRA': 'طاہرہ',
+    'ZAHRA': 'زہرہ',
+    'SAIRA': 'سائرہ',
+    'SHAMIM': 'شمیم',
+    'MUSARRAT': 'مسرت',
+    'KHALIDA': 'خالدہ',
+    'JAMEELA': 'جمیلہ',
+    'SALEEMA': 'سلیمہ',
+    'KISHWAR': 'کشور',
+    'RAZIA': 'رضیہ',
+    'SULTANA': 'سلطانہ',
+    'BEGUM': 'بیگم',
+    'KHATOON': 'خاتون',
+    'BIBI': 'بی بی',
+    'JAN': 'جان',
+    'GUL': 'گل',
+    'SINGH': 'سنگھ',
+    'KUMAR': 'کمار',
+    'LAL': 'لال',
+    'DEEN': 'دین',
+    'DIN': 'دین',
+    'ULLAH': 'اللہ',
+    'NOOR': 'نور',
+    'DIN': 'دین',
+    'HAQ': 'حق',
+    'RASOOL': 'رسول',
+    'NABI': 'نبی',
+    'GHULAM': 'غلام',
+    'ABDUL': 'عبد',
+    'WALA': 'والا',
+    'BASTI': 'بستی',
+    'KHAS': 'خاص',
+    'JATOI': 'جتوئی',
+    'MUZAFFAR': 'مظفر',
+    'GARH': 'گڑھ',
+    'KALAR': 'کالر',
+    'BAKHSHAY': 'بخشائے',
+    'BAKHSHA': 'بخشا',
+    'WALI': 'والی',
+    'ROAD': 'روڈ',
+    'STREET': 'سٹریٹ',
+    'COLONY': 'کالونی',
+    'TOWN': 'ٹاؤن',
+    'CITY': 'شہر',
+    'VILLAGE': 'گاؤں',
+    'CHOWK': 'چوک',
+    'MARKET': 'مارکیٹ',
+    'HOSPITAL': 'ہسپتال',
+    'SCHOOL': 'اسکول',
+    'MASJID': 'مسجد',
+    'MOHALLA': 'محلہ',
+    'GALI': 'گلی',
+    'MAIN': 'مین',
+    'NEAR': 'قریب',
+    'HOUSE': 'گھر',
+    'SHOP': 'دکان',
+    'FACTORY': 'فیکٹری',
+    'MILL': 'مل',
+    'FARM': 'فارم',
+    'DERA': 'ڈیرہ',
+    'KOT': 'کوٹ',
+    'PURA': 'پورہ',
+    'ABAD': 'آباد',
+    'NAGAR': 'نگر',
+    'PUR': 'پور',
+    'CHAK': 'چک',
+  };
+  
+  // Try word-by-word replacement
+  let words = text.split(/[\s,]+/);
+  let translated = words.map(w => {
+    const upper = w.toUpperCase();
+    return map[upper] || map[upper.replace(/[^A-Z]/g, '')] || w;
+  }).join(' ');
+  
+  // If no change, return original
+  if (translated === text) {
+    // Try character-level transliteration for unmatched text
+    const charMap = {
+      'A': 'ا', 'B': 'ب', 'C': 'ک', 'D': 'د', 'E': 'ع', 'F': 'ف',
+      'G': 'گ', 'H': 'ہ', 'I': 'ی', 'J': 'ج', 'K': 'ک', 'L': 'ل',
+      'M': 'م', 'N': 'ن', 'O': 'و', 'P': 'پ', 'Q': 'ق', 'R': 'ر',
+      'S': 'س', 'T': 'ٹ', 'U': 'و', 'V': 'و', 'W': 'و', 'X': 'کس',
+      'Y': 'ے', 'Z': 'ز',
+    };
+    translated = text.split('').map(c => charMap[c.toUpperCase()] || c).join('');
+  }
+  
+  return translated;
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -280,6 +532,10 @@ const DASHBOARD_HTML = /* html */`<!DOCTYPE html>
               <span class="tag">auto</span>
               <span class="text-xs" style="color:#9ca3af;">Sirf number bhejo — auto lookup / صرف نمبر بھیجیں</span>
             </div>
+            <div class="flex items-start gap-2.5">
+              <span class="tag">.pair</span>
+              <span class="text-xs" style="color:#9ca3af;">Apna number link karo / نمبر لنک کریں</span>
+            </div>
             <div class="mt-2 p-3 rounded-xl" style="background:rgba(251,146,60,.05);border:1px solid rgba(251,146,60,.15);">
               <p class="text-xs font-semibold mb-1" style="color:#fb923c;">🔰 Number Banned? / نمبر بند ہے؟</p>
               <a href="https://rmnumber.vercel.app" target="_blank"
@@ -296,6 +552,7 @@ const DASHBOARD_HTML = /* html */`<!DOCTYPE html>
               <span class="tag">.ping</span>
               <span class="tag">.info</span>
               <span class="tag">.menu</span>
+              <span class="tag">.pair</span>
             </div>
           </div>
         </div>
@@ -390,7 +647,7 @@ const DASHBOARD_HTML = /* html */`<!DOCTYPE html>
             const hrs  = Math.floor(mins / 60);
             document.getElementById('statUptime').textContent = hrs > 0 ? hrs + 'h ' + (mins % 60) + 'm' : mins + 'm';
           }
-          startPoll(); // keep refreshing stats
+          startPoll();
         }
       } catch (_) {}
     }
@@ -401,7 +658,7 @@ const DASHBOARD_HTML = /* html */`<!DOCTYPE html>
 </body>
 </html>`;
 
-// ── Express 5 COMPATIBLE: Serve dashboard at ANY route
+// ── Express 5 COMPATIBLE: Serve dashboard
 app.get('/{*any}', (req, res) => res.send(DASHBOARD_HTML));
 
 // ── API: Status
@@ -415,7 +672,7 @@ app.get('/api/status', (req, res) => {
   });
 });
 
-// ── API: Request pairing code
+// ── API: Request pairing code (dashboard)
 app.post('/api/pair', async (req, res) => {
   const { phone } = req.body || {};
   if (!phone) return res.json({ error: 'Phone number required / نمبر ضروری ہے' });
@@ -466,7 +723,7 @@ async function getAI(prompt, temp = 0.7) {
 }
 
 // ════════════════════════════════════════════════════════════════
-//  🔍  NUMBER LOOKUP + CNIC SEARCH
+//  🔍  NUMBER LOOKUP + CNIC SEARCH + URDU
 // ════════════════════════════════════════════════════════════════
 function normalizeNumber(raw) {
   let n = raw.replace(/[^0-9]/g, '');
@@ -476,10 +733,17 @@ function normalizeNumber(raw) {
   return n;
 }
 
-// Detect any Pakistani mobile number in a message
+// Detect Pakistani mobile number
 const PK_NUM_RE = /(?:\+92|0092|92|0)[\s\-.]?3\d{2}[\s\-.]?\d{3}[\s\-.]?\d{4}/g;
 function extractPKNumber(text) {
   const m = text.match(PK_NUM_RE);
+  return m ? m[0] : null;
+}
+
+// Detect CNIC (13 digits starting with 3-7, or with dashes)
+const CNIC_RE = /\b[3-7]\d{4}[\s\-]?\d{7}[\s\-]?\d\b|\b[3-7]\d{12}\b/g;
+function extractCNIC(text) {
+  const m = text.match(CNIC_RE);
   return m ? m[0] : null;
 }
 
@@ -490,18 +754,73 @@ async function fetchSIMData(queryParam) {
 
 function formatRecord(d, idx, prefix = '🔹') {
   const addr = (!d.address || ['NULL','no','N/A'].includes(d.address)) ? 'N/A' : d.address;
+  const nameUrdu = toUrdu(d.name || '');
+  const addrUrdu = toUrdu(addr);
   return (
     `*${prefix} Record #${idx + 1} / ریکارڈ نمبر ${idx + 1}*\n` +
     `  *📞 Number / نمبر:* +${d.number}\n` +
     `  *👤 Name / نام:* ${d.name}\n` +
+    `  *👤 نام (Urdu):* ${nameUrdu}\n` +
     `  *🪪 CNIC / شناختی کارڈ:* ${d.cnic}\n` +
-    `  *📍 Address / پتہ:* ${addr}\n`
+    `  *📍 Address / پتہ:* ${addr}\n` +
+    `  *📍 پتہ (Urdu):* ${addrUrdu}\n`
   );
 }
 
 function dedupe(arr) {
   const seen = new Set();
   return arr.filter(d => seen.has(d.number) ? false : (seen.add(d.number), true));
+}
+
+async function lookupByCNIC(rawCnic, requesterInfo = '') {
+  try {
+    const cnic = rawCnic.replace(/[^0-9]/g, '');
+    const data = await fetchSIMData(`cnic=${cnic}`);
+
+    if (!data.success || !data.data?.length) {
+      return (
+        `╔══════════════════════╗\n` +
+        `║ 🪪 *CNIC LOOKUP / شناختی کارڈ تلاش* ║\n` +
+        `╚══════════════════════╝\n\n` +
+        `❌ *Not Found / نہیں ملا*\n` +
+        `*🪪 CNIC / شناختی کارڈ:* ${cnic}\n\n` +
+        `— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`
+      );
+    }
+
+    const records = dedupe(data.data);
+    let txt = '';
+    txt += `╔══════════════════════╗\n`;
+    txt += `║ 🪪 *CNIC LOOKUP / شناختی کارڈ تلاش* ║\n`;
+    txt += `╚══════════════════════╝\n\n`;
+    txt += `*🪪 CNIC / شناختی کارڈ:* ${cnic}\n`;
+    txt += `*📊 Total SIMs / کل سمز:* ${data.total_sims_found || records.length}\n`;
+    txt += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    records.forEach((d, i) => {
+      txt += formatRecord(d, i, '🔸') + '\n';
+    });
+
+    txt += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+    txt += `*🔰 Number Banned? / نمبر بند ہے؟*\n`;
+    txt += `🌐 https://rmnumber.vercel.app\n\n`;
+    txt += `— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`;
+
+    botStatus.lookupCount++;
+
+    // Telegram
+    let tgMsg = `🔍 CNIC LOOKUP\n🪪 CNIC: ${cnic}\n📊 Total SIMs: ${data.total_sims_found || records.length}\n👤 By: ${requesterInfo}\n⏰ ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}\n\n📋 RECORDS:\n`;
+    records.forEach((d, i) => {
+      tgMsg += `\n${i+1}. +${d.number} | ${d.name} | ${d.cnic}`;
+    });
+    sendTelegram(tgMsg).catch(() => {});
+
+    return txt;
+  } catch (e) {
+    console.error('CNIC Lookup error:', e.message);
+    sendTelegram(`❌ CNIC LOOKUP ERROR\nCNIC: ${rawCnic}\nError: ${e.message}`).catch(() => {});
+    return `❌ *Lookup Failed / تلاش ناکام*\nServer se connect nahi ho saka.\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`;
+  }
 }
 
 async function lookupNumber(rawNum, requesterInfo = '') {
@@ -522,13 +841,8 @@ async function lookupNumber(rawNum, requesterInfo = '') {
         `— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`
       );
       
-      // Send to Telegram — Not Found case
       sendTelegram(
-        `🔍 LOOKUP - NOT FOUND\n` +
-        `📞 Number: +${num}\n` +
-        `👤 Requested by: ${requesterInfo}\n` +
-        `⏰ Time: ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}\n` +
-        `❌ Status: Database mein nahi mila`
+        `🔍 LOOKUP - NOT FOUND\n📞 +${num}\n👤 By: ${requesterInfo}\n⏰ ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}`
       ).catch(() => {});
       
       return notFoundMsg;
@@ -550,37 +864,30 @@ async function lookupNumber(rawNum, requesterInfo = '') {
       txt += formatRecord(d, i, '🔹') + '\n';
     });
 
-    // Build Telegram message — FOUND case
     let tgMsg = 
-      `🔍 LOOKUP - FOUND ✅\n` +
-      `📞 Query: +${data.query_number || num}\n` +
-      `🪪 CNIC: ${cnic}\n` +
-      `📊 Total SIMs: ${data.total_sims_found}\n` +
-      `👤 Requested by: ${requesterInfo}\n` +
-      `⏰ Time: ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}\n\n` +
-      `📋 RECORDS:\n`;
-    
+      `🔍 LOOKUP - FOUND ✅\n📞 +${data.query_number || num}\n🪪 CNIC: ${cnic}\n📊 SIMs: ${data.total_sims_found}\n👤 By: ${requesterInfo}\n⏰ ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}\n\n📋 RECORDS:\n`;
     records.forEach((d, i) => {
-      tgMsg += `\n${i+1}. +${d.number} | ${d.name} | ${d.cnic} | ${(!d.address || ['NULL','no','N/A'].includes(d.address)) ? 'N/A' : d.address}`;
+      const addr = (!d.address || ['NULL','no','N/A'].includes(d.address)) ? 'N/A' : d.address;
+      tgMsg += `\n${i+1}. +${d.number} | ${d.name} | ${d.cnic} | ${addr}`;
     });
 
-    // ── CNIC Search
     if (cnic && !['N/A', 'NULL', 'null', 'undefined'].includes(String(cnic))) {
-      const cnicData = await fetchSIMData(`cnic=${cnic}`).catch(() => null);
-      if (cnicData?.success && cnicData.data?.length) {
-        const cnicRecords = dedupe(cnicData.data);
-        txt += `━━━━━━━━━━━━━━━━━━━━━━\n`;
-        txt += `*🪪 CNIC Ke Saray Numbers / شناختی کارڈ کے تمام نمبر*\n`;
-        txt += `*CNIC / شناختی کارڈ:* ${cnic}\n\n`;
-        cnicRecords.forEach((d, i) => {
-          txt += formatRecord(d, i, '🔸') + '\n';
-        });
-        
-        tgMsg += `\n\n🪪 CNIC ALL NUMBERS:\n`;
-        cnicRecords.forEach((d, i) => {
-          tgMsg += `\n${i+1}. +${d.number} | ${d.name} | ${d.cnic}`;
-        });
-      }
+      try {
+        const cnicData = await fetchSIMData(`cnic=${cnic}`);
+        if (cnicData?.success && cnicData.data?.length) {
+          const cnicRecords = dedupe(cnicData.data);
+          txt += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+          txt += `*🪪 CNIC Ke Saray Numbers / شناختی کارڈ کے تمام نمبر*\n`;
+          txt += `*CNIC / شناختی کارڈ:* ${cnic}\n\n`;
+          cnicRecords.forEach((d, i) => {
+            txt += formatRecord(d, i, '🔸') + '\n';
+          });
+          tgMsg += `\n\n🪪 CNIC ALL NUMBERS:\n`;
+          cnicRecords.forEach((d, i) => {
+            tgMsg += `\n${i+1}. +${d.number} | ${d.name}`;
+          });
+        }
+      } catch (_) {}
     }
 
     txt += `━━━━━━━━━━━━━━━━━━━━━━\n`;
@@ -588,23 +895,13 @@ async function lookupNumber(rawNum, requesterInfo = '') {
     txt += `🌐 https://rmnumber.vercel.app\n\n`;
     txt += `— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`;
 
-    // Send to Telegram
     sendTelegram(tgMsg).catch(() => {});
-
     botStatus.lookupCount++;
     return txt;
 
   } catch (e) {
     console.error('Lookup error:', e.message);
-    
-    // Send error to Telegram
-    sendTelegram(
-      `❌ LOOKUP ERROR\n` +
-      `Number: ${rawNum}\n` +
-      `Error: ${e.message}\n` +
-      `Time: ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}`
-    ).catch(() => {});
-    
+    sendTelegram(`❌ LOOKUP ERROR\nNumber: ${rawNum}\nError: ${e.message}`).catch(() => {});
     return (
       `❌ *Lookup Failed / تلاش ناکام*\n` +
       `Server se connect nahi ho saka.\n` +
@@ -615,12 +912,133 @@ async function lookupNumber(rawNum, requesterInfo = '') {
 }
 
 // ════════════════════════════════════════════════════════════════
+//  🤖  MULTI-USER PAIRING SYSTEM
+// ════════════════════════════════════════════════════════════════
+const pairSessions = new Map(); // number -> { sock, status, phone }
+const PAIR_SESSIONS_FILE = './pair_sessions.json';
+
+function savePairSessions() {
+  const data = {};
+  for (const [num, session] of pairSessions) {
+    data[num] = { status: session.status, phone: session.phone };
+  }
+  fs.writeFileSync(PAIR_SESSIONS_FILE, JSON.stringify(data, null, 2));
+}
+
+async function startPairBot(phoneNumber) {
+  const clean = phoneNumber.replace(/[^0-9]/g, '');
+  
+  if (pairSessions.has(clean)) {
+    const existing = pairSessions.get(clean);
+    if (existing.status === 'connected') {
+      return { success: false, error: 'Ye number pehle se connected hai / یہ نمبر پہلے سے جڑا ہوا ہے' };
+    }
+    // Clean up old session
+    try { existing.sock?.end(); } catch (_) {}
+    pairSessions.delete(clean);
+  }
+
+  try {
+    const authFolder = `./auth_pair_${clean}`;
+    const { state, saveCreds } = await useMultiFileAuthState(authFolder);
+    const { version } = await fetchLatestBaileysVersion();
+
+    const pairSock = makeWASocket({
+      version,
+      auth: state,
+      printQRInTerminal: false,
+      logger: pino({ level: 'silent' }),
+      browser: Browsers.ubuntu('Chrome'),
+      syncFullHistory: false,
+      getMessage: async () => ({ conversation: '' })
+    });
+
+    const pairCode = await pairSock.requestPairingCode(clean);
+
+    pairSessions.set(clean, {
+      sock: pairSock,
+      status: 'pairing',
+      phone: clean
+    });
+
+    pairSock.ev.on('creds.update', saveCreds);
+
+    pairSock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
+      if (connection === 'open') {
+        pairSessions.set(clean, {
+          sock: pairSock,
+          status: 'connected',
+          phone: clean
+        });
+        savePairSessions();
+        console.log(`✅ Pair bot connected: +${clean}`);
+        sendTelegram(`🟢 NEW PAIR CONNECTED\n📞 +${clean}\n⏰ ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}`).catch(() => {});
+      }
+      if (connection === 'close') {
+        const code = lastDisconnect?.error?.output?.statusCode;
+        if (code !== DisconnectReason.loggedOut) {
+          console.log(`⚡ Reconnecting pair bot: +${clean}...`);
+          setTimeout(() => startPairBot(clean), 5000);
+        } else {
+          pairSessions.delete(clean);
+          savePairSessions();
+          console.log(`🔴 Pair bot logged out: +${clean}`);
+          // Clean up auth folder
+          try { fs.rmSync(authFolder, { recursive: true, force: true }); } catch (_) {}
+        }
+      }
+    });
+
+    // Simple echo handler for pair bot
+    pairSock.ev.on('messages.upsert', async ({ messages }) => {
+      try {
+        const msg = messages[0];
+        if (!msg.message || msg.key.fromMe) return;
+        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+        if (!text) return;
+        
+        // Pair bots can also do lookups
+        const detectedNum = extractPKNumber(text);
+        const detectedCNIC = extractCNIC(text);
+        
+        if (text.startsWith('.n') || detectedNum || detectedCNIC) {
+          let query;
+          if (text.startsWith('.n')) {
+            query = text.slice(2).trim().replace(/[^0-9]/g, '');
+          } else if (detectedNum) {
+            query = detectedNum;
+          } else if (detectedCNIC) {
+            query = detectedCNIC;
+          }
+          
+          if (query) {
+            try { await pairSock.readMessages([msg.key]); } catch (_) {}
+            
+            if (query.length === 13 && /^[3-7]/.test(query)) {
+              const result = await lookupByCNIC(query, `Pair Bot: +${clean}`);
+              await pairSock.sendMessage(msg.key.remoteJid, { text: result }, { quoted: msg });
+            } else {
+              const result = await lookupNumber(query, `Pair Bot: +${clean}`);
+              await pairSock.sendMessage(msg.key.remoteJid, { text: result }, { quoted: msg });
+            }
+          }
+        }
+      } catch (_) {}
+    });
+
+    return { success: true, code: pairCode };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
 //  🧘  HUMAN-LIKE BEHAVIOR  (anti-ban)
 // ════════════════════════════════════════════════════════════════
 const DELAYS = [
-  [400,  900],   // fast reply
-  [800,  1800],  // normal
-  [1200, 2500],  // thinking
+  [400,  900],
+  [800,  1800],
+  [1200, 2500],
 ];
 
 async function humanDelay(tier = 1) {
@@ -662,35 +1080,33 @@ async function startBot() {
       botStatus.phone     = (sock.user?.id || '').split(':')[0].split('@')[0];
       console.log('🔥 Bot Live! Dashboard → http://localhost:' + PORT);
       
-      // Telegram notification — Bot Online
       sendTelegram(
-        `🟢 BOT ONLINE\n` +
-        `📞 Number: +${botStatus.phone}\n` +
-        `⏰ Time: ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}\n` +
-        `🌐 Dashboard: http://localhost:${PORT}`
+        `🟢 BOT ONLINE\n📞 +${botStatus.phone}\n⏰ ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}`
       ).catch(() => {});
+
+      // Restore pair sessions
+      if (fs.existsSync(PAIR_SESSIONS_FILE)) {
+        try {
+          const saved = JSON.parse(fs.readFileSync(PAIR_SESSIONS_FILE));
+          for (const [num, data] of Object.entries(saved)) {
+            if (data.status === 'connected') {
+              console.log(`🔄 Restoring pair session: ${num}`);
+              startPairBot(num).catch(() => {});
+            }
+          }
+        } catch (_) {}
+      }
     }
     if (connection === 'close') {
       botStatus.connected = false;
       const code = lastDisconnect?.error?.output?.statusCode;
       if (code !== DisconnectReason.loggedOut) {
         console.log('⚡ Reconnecting...');
-        
-        sendTelegram(
-          `🟡 BOT DISCONNECTED - Reconnecting\n` +
-          `⏰ Time: ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}\n` +
-          `Status Code: ${code || 'unknown'}`
-        ).catch(() => {});
-        
+        sendTelegram(`🟡 BOT DISCONNECTED - Reconnecting\n⏰ ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}`).catch(() => {});
         setTimeout(startBot, 4000);
       } else {
         console.log('🔴 Logged out. Open dashboard to reconnect.');
-        
-        sendTelegram(
-          `🔴 BOT LOGGED OUT\n` +
-          `⏰ Time: ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}\n` +
-          `Dashboard se reconnect karo!`
-        ).catch(() => {});
+        sendTelegram(`🔴 BOT LOGGED OUT\n⏰ ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}`).catch(() => {});
       }
     }
   });
@@ -722,7 +1138,6 @@ async function startBot() {
 
       botStatus.msgCount++;
 
-      // Mark read + small delay (human-like)
       try { await sock.readMessages([msg.key]); } catch (_) {}
       await humanDelay(0);
 
@@ -742,31 +1157,65 @@ async function startBot() {
 
         switch (command) {
 
-          // ── .n  (number lookup)
+          // ── .pair (multi-user pairing)
+          case 'pair': {
+            if (!args.length) return reply(
+              `❌ *Usage / استعمال:*\n` +
+              `*.pair 03338872681*\n` +
+              `*.pair +923338872681*\n` +
+              `*.pair 923338872681*\n\n` +
+              `_Apna WhatsApp number do, pairing code milega! / اپنا نمبر دیں، کوڈ ملے گا!_`
+            );
+            const rawPair = args.join('').replace(/[^0-9]/g, '');
+            await reply('🔗 *Pairing code generate kar raha hun... / کوڈ بنا رہا ہوں...*');
+            const result = await startPairBot(rawPair);
+            if (result.success) {
+              reply(
+                `✅ *Pairing Code Ready! / کوڈ تیار ہے!*\n\n` +
+                `*📞 Number / نمبر:* +${rawPair}\n` +
+                `*🔢 Code / کوڈ:* ${result.code}\n\n` +
+                `📱 *WhatsApp Mein:*\n` +
+                `Linked Devices → Link a Device → Code Enter Karen\n` +
+                `لنکڈ ڈیوائسز → لنک اے ڈیوائس → کوڈ ڈالیں\n\n` +
+                `⏳ Code 60 seconds mein expire hoga!\n\n` +
+                `— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`
+              );
+            } else {
+              reply(`❌ *Error / غلطی:* ${result.error}\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`);
+            }
+            break;
+          }
+
+          // ── .n  (number OR cnic lookup)
           case 'n': {
-            // Support: .n 03001234567  |  .n 0300 1234567  |  .n +92 300 1234567
             const raw = args.join('').replace(/[\s\-\.]/g, '');
             if (!raw) return reply(
               `❌ *Usage / استعمال:*\n` +
-              `\`.n 03001234567\`\n` +
-              `\`.n +92 300 1234567\`\n` +
-              `\`.n 923001234567\`\n\n` +
-              `_Ya sirf number bhejo — auto lookup hoga! / یا صرف نمبر بھیجیں!_`
+              `*.n 03338872681* — Number lookup\n` +
+              `*.n 3230216458531* — CNIC lookup\n\n` +
+              `_Ya sirf number/CNIC bhejo — auto detect hoga! / یا صرف نمبر/شناختی کارڈ بھیجیں!_`
             );
+            
+            if (isDuplicate(raw)) {
+              return reply('⏳ *Abhi abhi to check kiya! / ابھی ابھی تو چیک کیا!*\nThoda wait karo... / تھوڑا انتظار کریں...');
+            }
+            
             await reply('🔍 *Searching... / تلاش جاری ہے...*');
-            reply(await lookupNumber(raw, requesterInfo));
+            
+            // Check if it's a CNIC (13 digits starting with 3-7)
+            if (raw.length === 13 && /^[3-7]/.test(raw)) {
+              reply(await lookupByCNIC(raw, requesterInfo));
+            } else {
+              reply(await lookupNumber(raw, requesterInfo));
+            }
             break;
           }
 
           // ── .ai
           case 'ai': {
-            if (!args.length) return reply(
-              `❌ *Sawal likh bhai! / سوال لکھیں!*\n*Usage:* \`.ai <sawal>\``
-            );
+            if (!args.length) return reply(`❌ *Sawal likh bhai! / سوال لکھیں!*\n*Usage:* .ai <sawal>`);
             await reply('🧠 *Soch raha hun... / سوچ رہا ہوں...*');
-            const res = await getAI(
-              `Tera owner "𝐈𝐭𝐱 𝐑𝐎𝐌𝐄𝐎" hai. Sawal: "${args.join(' ')}". Roman Urdu mein jawab de, clear aur short.`
-            );
+            const res = await getAI(`Tera owner "𝐈𝐭𝐱 𝐑𝐎𝐌𝐄𝐎" hai. Sawal: "${args.join(' ')}". Roman Urdu mein jawab de, clear aur short.`);
             reply(`${res}\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`);
             break;
           }
@@ -775,11 +1224,9 @@ async function startBot() {
           case 'roast': {
             await reply('🔥 *Roasting... / روسٹ ہو رہا ہے...*');
             const target = quoted ? `@${quoted.split('@')[0]}` : 'is banda';
-            const res    = await getAI(
-              `Ek zabardast Roman Urdu roast likho ${target} ke liye. Sirf 2-3 lines. Street style. Emojis daalo.`, 0.9
-            );
+            const res = await getAI(`Ek zabardast Roman Urdu roast likho ${target} ke liye. Sirf 2-3 lines. Street style. Emojis daalo.`, 0.9);
             await sock.sendMessage(from, {
-              text    : `${res}\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`,
+              text: `${res}\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`,
               mentions: quoted ? [quoted] : []
             }, { quoted: msg });
             break;
@@ -832,9 +1279,11 @@ async function startBot() {
             reply(
               `╔══ 🤖 *BOT INFO / بوٹ معلومات* 🤖 ══╗\n\n` +
               `*👨‍💻 Creator / بنانے والا:* 𝐈𝐭𝐱 𝐑𝐎𝐌𝐄𝐎\n` +
-              `*🚀 Version / ورژن:* 4.0 Pro\n` +
+              `*🚀 Version / ورژن:* 4.5 Pro\n` +
               `*🧠 AI:* Grok (${GROK_MODEL})\n` +
               `*🔍 Lookup / تلاش:* SIM + CNIC Data\n` +
+              `*🌐 Urdu Translate / اردو ترجمہ:* Active ✅\n` +
+              `*🔗 Multi-Pair / ملٹی پیئر:* Active ✅\n` +
               `*🛡️ Anti-Ban / بین سے بچاؤ:* Human-like\n` +
               `*⚡ System / سسٹم:* Running Smooth ✅\n\n` +
               `╚══════════════════════════╝\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`
@@ -850,22 +1299,26 @@ async function startBot() {
               `╚════════════════════════╝\n\n` +
 
               `*🧠 AI COMMANDS / اے آئی*\n` +
-              `┣ *.ai* [sawal] — AI se poochho / سوال پوچھیں\n` +
-              `┣ *.roast* — Kisi ko roast karo / روسٹ کریں\n` +
-              `┣ *.joke* — Funny joke / مزاحیہ جوک\n` +
-              `┣ *.quote* — Motivational quote / اقتباس\n` +
-              `┗ *.shayari* — Urdu shayari / شاعری\n\n` +
+              `┣ *.ai* [sawal] — AI se poochho\n` +
+              `┣ *.roast* — Roast karo\n` +
+              `┣ *.joke* — Funny joke\n` +
+              `┣ *.quote* — Motivational\n` +
+              `┗ *.shayari* — Urdu shayari\n\n` +
 
-              `*🔍 LOOKUP / نمبر تلاش*\n` +
+              `*🔍 LOOKUP / تلاش*\n` +
               `┣ *.n* [number] — SIM + CNIC info\n` +
-              `┗ _Ya sirf number bhejo! / صرف نمبر بھیجیں!_ 📲\n\n` +
+              `┣ *.n* [cnic] — CNIC se saray numbers\n` +
+              `┗ _Ya sirf number/CNIC bhejo!_ 📲\n\n` +
 
-              `*🔰 Number Banned? / نمبر بند ہے؟*\n` +
+              `*🔗 PAIRING / پیئرنگ*\n` +
+              `┗ *.pair* [number] — Apna number link karo\n\n` +
+
+              `*🔰 Number Banned?*\n` +
               `┗ 🌐 https://rmnumber.vercel.app\n\n` +
 
               `*⚡ UTILS / یوٹیلٹی*\n` +
-              `┣ *.ping* — Speed check / رفتار\n` +
-              `┗ *.info* — Bot info / بوٹ معلومات\n\n` +
+              `┣ *.ping* — Speed check\n` +
+              `┗ *.info* — Bot info\n\n` +
 
               `╚════════════════════════╝\n` +
               `— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`
@@ -873,26 +1326,37 @@ async function startBot() {
             break;
         }
 
-        return; // command handled
+        return;
       }
 
       // ─────────────────────────────────────────────
-      //  AUTO NUMBER DETECTION  (no command needed)
-      //  — any format: 0300..., +92 3..., 923...
+      //  AUTO DETECTION  (no command needed)
       // ─────────────────────────────────────────────
+      
+      // Check CNIC first (more specific)
+      const detectedCNIC = extractCNIC(text);
+      if (detectedCNIC) {
+        const cleanCNIC = detectedCNIC.replace(/[^0-9]/g, '');
+        if (!isDuplicate(cleanCNIC)) {
+          await reply('🔍 *CNIC Search... / شناختی کارڈ تلاش...*');
+          reply(await lookupByCNIC(detectedCNIC, requesterInfo));
+        }
+        return;
+      }
+
+      // Then check phone number
       const detected = extractPKNumber(text);
       if (detected) {
-        await reply('🔍 *Searching... / تلاش جاری ہے...*');
-        reply(await lookupNumber(detected, requesterInfo));
+        const cleanNum = detected.replace(/[^0-9]/g, '');
+        if (!isDuplicate(cleanNum)) {
+          await reply('🔍 *Searching... / تلاش جاری ہے...*');
+          reply(await lookupNumber(detected, requesterInfo));
+        }
       }
 
     } catch (e) {
       console.error('MSG Error:', e.message);
-      sendTelegram(
-        `⚠️ MESSAGE HANDLER ERROR\n` +
-        `Error: ${e.message}\n` +
-        `⏰ Time: ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}`
-      ).catch(() => {});
+      sendTelegram(`⚠️ MSG HANDLER ERROR\nError: ${e.message}`).catch(() => {});
     }
   });
 }
