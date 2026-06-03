@@ -376,7 +376,7 @@ const DASHBOARD_HTML = /* html */`<!DOCTYPE html>
 </html>`;
 
 // ── Serve dashboard at /
-app.get('*', (req, res) => res.send(DASHBOARD_HTML));
+app.get('/(.*)', (req, res) => es.send(DASHBOARD_HTML));
 
 // ── API: Status
 app.get('/api/status', (req, res) => {
