@@ -1,801 +1,804 @@
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, Browsers } = require('@whiskeysockets/baileys');
+// ═══════════════════════════════════════════════════════════════
+//  🤖  ITX ROMEO BOT  v4.0  —  WhatsApp Bot + Dashboard
+// ═══════════════════════════════════════════════════════════════
+const {
+  default: makeWASocket,
+  useMultiFileAuthState,
+  fetchLatestBaileysVersion,
+  Browsers,
+  DisconnectReason
+} = require('@whiskeysockets/baileys');
 const pino    = require('pino');
-const rl      = require('readline').createInterface({ input: process.stdin, output: process.stdout });
 const fs      = require('fs');
-const path    = require('path');
 const express = require('express');
 
-const question = (t) => new Promise(r => rl.question(t, r));
-
-// ═══════════════════════════════════════════════
-// 🌐 WEB SERVER
-// ═══════════════════════════════════════════════
+// ── Express setup
 const app  = express();
 const PORT = process.env.PORT || 3000;
-app.use(express.static(path.join(__dirname, 'public')));
-app.get('/{*path}', (req, res) => {
-    const f = path.join(__dirname, 'public', 'index.html');
-    if (fs.existsSync(f)) res.sendFile(f);
-    else res.send('𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺 Bot is Live 🔥');
-});
-app.listen(PORT, () => console.log(`🌐 Web server live → http://localhost:${PORT}`));
+app.use(express.json());
 
-// ═══════════════════════════════════════════════
-// ⚙️ SETTINGS
-// ═══════════════════════════════════════════════
+// ── Global state
+let sock       = null;
+let botStatus  = { connected: false, phone: '', uptime: null, msgCount: 0, lookupCount: 0 };
+
+// ── Settings
 const SETTINGS_FILE = './settings.json';
-let settings = { lockedJid: null };
+let settings = {};
 if (fs.existsSync(SETTINGS_FILE)) {
-    try { settings = JSON.parse(fs.readFileSync(SETTINGS_FILE)); } catch (_) {}
+  try { settings = JSON.parse(fs.readFileSync(SETTINGS_FILE)); } catch (_) {}
 }
 const saveSettings = () => fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
 
-// ═══════════════════════════════════════════════
-// ⚠️ WARNINGS STORE
-// ═══════════════════════════════════════════════
-const WARN_FILE = './warnings.json';
-let warnData = {};
-if (fs.existsSync(WARN_FILE)) {
-    try { warnData = JSON.parse(fs.readFileSync(WARN_FILE)); } catch (_) {}
-}
-const saveWarnings = () => fs.writeFileSync(WARN_FILE, JSON.stringify(warnData, null, 2));
+// ════════════════════════════════════════════════════════════════
+//  🌐  DASHBOARD HTML  (embedded — no extra files needed)
+// ════════════════════════════════════════════════════════════════
+const DASHBOARD_HTML = /* html */`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>ITX ROMEO — Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { mono: ['Space Mono','monospace'], sans: ['DM Sans','sans-serif'] },
+          colors: {
+            brand: { 50:'#fff1f2', 100:'#ffe4e6', 200:'#fecdd3', 300:'#fda4af',
+                     400:'#fb7185', 500:'#f43f5e', 600:'#e11d48', 700:'#be123c',
+                     800:'#9f1239', 900:'#881337', 950:'#4c0519' }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{background:#050505;color:#e8e8e0;font-family:'DM Sans',sans-serif;min-height:100vh;overflow-x:hidden;}
+    .noise{position:fixed;inset:0;pointer-events:none;opacity:.04;z-index:0;
+      background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");}
+    .grid-bg{position:fixed;inset:0;pointer-events:none;z-index:0;
+      background-image:linear-gradient(rgba(244,63,94,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(244,63,94,.04) 1px,transparent 1px);
+      background-size:40px 40px;}
+    .card{background:rgba(18,18,18,.9);border:1px solid rgba(244,63,94,.12);border-radius:16px;backdrop-filter:blur(12px);}
+    .card-glow{box-shadow:0 0 40px rgba(244,63,94,.08),inset 0 1px 0 rgba(255,255,255,.04);}
+    .btn-primary{background:linear-gradient(135deg,#e11d48,#be123c);color:#fff;border:none;cursor:pointer;
+      transition:all .2s;font-family:'DM Sans',sans-serif;font-weight:600;}
+    .btn-primary:hover{transform:translateY(-1px);box-shadow:0 8px 24px rgba(225,29,72,.3);}
+    .btn-primary:active{transform:translateY(0);}
+    .btn-danger{background:rgba(220,38,38,.15);color:#fca5a5;border:1px solid rgba(220,38,38,.3);cursor:pointer;
+      transition:all .2s;font-family:'DM Sans',sans-serif;font-weight:500;}
+    .btn-danger:hover{background:rgba(220,38,38,.25);}
+    .btn-ghost{background:rgba(255,255,255,.05);color:#a8a8a0;border:1px solid rgba(255,255,255,.08);cursor:pointer;
+      transition:all .2s;font-family:'DM Sans',sans-serif;font-weight:500;}
+    .btn-ghost:hover{background:rgba(255,255,255,.1);}
+    input{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);color:#e8e8e0;
+      font-family:'DM Sans',sans-serif;transition:all .2s;}
+    input:focus{outline:none;border-color:rgba(244,63,94,.5);box-shadow:0 0 0 3px rgba(244,63,94,.1);}
+    input::placeholder{color:rgba(255,255,255,.25);}
+    .tag{font-family:'Space Mono',monospace;font-size:.7rem;background:rgba(244,63,94,.1);
+      color:#fb7185;border:1px solid rgba(244,63,94,.2);border-radius:6px;padding:2px 8px;}
+    .dot-online{width:8px;height:8px;background:#22c55e;border-radius:50%;
+      animation:pulse-dot 2s ease-in-out infinite;box-shadow:0 0 0 0 rgba(34,197,94,.4);}
+    .dot-offline{width:8px;height:8px;background:#6b7280;border-radius:50%;}
+    @keyframes pulse-dot{0%,100%{box-shadow:0 0 0 0 rgba(34,197,94,.4);}50%{box-shadow:0 0 0 6px rgba(34,197,94,0);}}
+    .code-box{font-family:'Space Mono',monospace;background:rgba(244,63,94,.06);
+      border:1px dashed rgba(244,63,94,.3);border-radius:12px;letter-spacing:.25em;}
+    .stat-num{font-family:'Space Mono',monospace;}
+    .fade-in{animation:fadeIn .4s ease both;}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
+    .slide-up{animation:slideUp .5s cubic-bezier(.22,1,.36,1) both;}
+    @keyframes slideUp{from{opacity:0;transform:translateY(30px);}to{opacity:1;transform:translateY(0);}}
+    .shimmer{position:relative;overflow:hidden;}
+    .shimmer::after{content:'';position:absolute;inset:0;
+      background:linear-gradient(90deg,transparent,rgba(255,255,255,.04),transparent);
+      animation:shimmer 2s infinite;}
+    @keyframes shimmer{from{transform:translateX(-100%);}to{transform:translateX(100%);}}
+    ::-webkit-scrollbar{width:4px;}
+    ::-webkit-scrollbar-track{background:transparent;}
+    ::-webkit-scrollbar-thumb{background:rgba(244,63,94,.3);border-radius:2px;}
+  </style>
+</head>
+<body>
+  <div class="noise"></div>
+  <div class="grid-bg"></div>
 
-function getWarn(groupJid, userJid, type) {
-    const key = `${groupJid}|${userJid}`;
-    if (!warnData[key]) warnData[key] = { link: 0, abuse: 0 };
-    return warnData[key][type] || 0;
-}
-function addWarn(groupJid, userJid, type) {
-    const key = `${groupJid}|${userJid}`;
-    if (!warnData[key]) warnData[key] = { link: 0, abuse: 0 };
-    warnData[key][type] = (warnData[key][type] || 0) + 1;
-    saveWarnings();
-    return warnData[key][type];
-}
-function resetWarn(groupJid, userJid) {
-    const key = `${groupJid}|${userJid}`;
-    delete warnData[key];
-    saveWarnings();
-}
+  <!-- ── LOGIN SCREEN -->
+  <div id="loginScreen" class="relative z-10 min-h-screen flex items-center justify-center p-4">
+    <div class="w-full max-w-sm slide-up">
 
-// ═══════════════════════════════════════════════
-// 🛡️ AUTO-MOD RULES
-// ═══════════════════════════════════════════════
-const LINK_REGEX = /(?:https?:\/\/|www\.)\S+|(?:bit\.ly|t\.me|wa\.me|youtu\.be|tinyurl\.com|is\.gd)\/\S+/i;
+      <!-- Logo -->
+      <div class="text-center mb-10">
+        <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-4"
+          style="background:linear-gradient(135deg,rgba(244,63,94,.2),rgba(190,18,60,.1));border:1px solid rgba(244,63,94,.2);">
+          <span style="font-size:1.8rem;">🤖</span>
+        </div>
+        <h1 class="text-2xl font-bold tracking-tight" style="font-family:'Space Mono',monospace;">
+          <span style="color:#f43f5e;">ITX</span> ROMEO
+        </h1>
+        <p class="text-sm mt-1" style="color:#6b7280;">WhatsApp Bot Control Panel</p>
+      </div>
 
-const ABUSE_WORDS = [
-    'fuck','fucker','fuckers','fucking','bitch','bastard','asshole','ass','dick','pussy','sex','porn',
-    'nude','nudes','horny','slut','whore','cunt','nigga','nigger','shit','motherfucker','mf',
-    'madarchod','maderchod','madar chod','mc','bkl','bhenchod','bhen chod','bc',
-    'chutiya','chutiye','choot','lund','lun','teri maa','maa ki','teri ma',
-    'gaand','gand','randi','harami','kutta','kutti','suar','sala','saali',
-    'phudi','phuddi','lavda','lauda','laude','choday','chodo','chodna',
-    'teri maa ki','maa di','maa di phudi','teri phudi','tere maa',
-    'wlyat','wlayati','ullu','ullad','ullat'
-];
+      <!-- Card -->
+      <div class="card card-glow p-6">
+        <!-- Login Form -->
+        <div id="loginForm">
+          <p class="text-xs mb-4" style="color:#6b7280;">
+            WhatsApp number daalo — pairing code milega
+            <br/><span style="color:#4b5563;">اپنا واٹس ایپ نمبر ڈالیں</span>
+          </p>
+          <input id="phoneInput" type="tel" placeholder="+92 300 1234567"
+            class="w-full px-4 py-3 rounded-xl text-sm mb-3"/>
+          <button onclick="requestPair()" class="btn-primary w-full py-3 rounded-xl text-sm mb-3">
+            🔗 Get Pairing Code / پیئرنگ کوڈ لیں
+          </button>
+          <button onclick="resetBot()" class="btn-danger w-full py-2.5 rounded-xl text-xs">
+            🗑️ Reset Previous Session / پرانا سیشن ڈیلیٹ کریں
+          </button>
+          <div id="statusMsg" class="mt-3 text-center text-xs min-h-4"></div>
+        </div>
 
-function containsAbuse(text) {
-    const lower = text.toLowerCase();
-    return ABUSE_WORDS.some(w => {
-        const re = new RegExp(`(^|[\\s,.!?])(${w.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')})([\\s,.!?]|$)`, 'i');
-        return re.test(lower) || lower.includes(w);
-    });
-}
-function containsLink(text) { return LINK_REGEX.test(text); }
+        <!-- Pairing Section -->
+        <div id="pairingSection" class="hidden text-center">
+          <p class="text-xs mb-1" style="color:#9ca3af;">WhatsApp میں یہ کوڈ ڈالیں</p>
+          <p class="text-xs mb-4" style="color:#6b7280;">Linked Devices → Link a Device → Enter Code</p>
+          <div class="code-box py-5 px-4 mb-4">
+            <span id="codeDisplay" class="text-3xl font-bold" style="color:#f43f5e;letter-spacing:.3em;"></span>
+          </div>
+          <p class="text-xs mb-4" style="color:#f59e0b;">⏳ Code 60 seconds mein expire hoga</p>
+          <p class="text-xs mb-4" style="color:#6b7280;">Connected hone ka wait kar raha hun...<br/>منتظر ہوں...</p>
+          <button onclick="showLoginForm()" class="btn-ghost px-4 py-2 rounded-lg text-xs">
+            ← Back / واپس
+          </button>
+          <div id="statusMsg2" class="mt-3 text-center text-xs min-h-4"></div>
+        </div>
+      </div>
 
-// ═══════════════════════════════════════════════
-// 🧠 GROK AI
-// ═══════════════════════════════════════════════
+      <p class="text-center text-xs mt-4" style="color:#374151;">
+        © 2025 𝐈𝐭𝐱 𝐑𝐎𝐌𝐄𝐎 — All rights reserved
+      </p>
+    </div>
+  </div>
+
+  <!-- ── DASHBOARD -->
+  <div id="dashboard" class="hidden relative z-10 min-h-screen">
+
+    <!-- Header -->
+    <header class="sticky top-0 z-20 px-6 py-4 flex items-center justify-between"
+      style="background:rgba(5,5,5,.85);backdrop-filter:blur(20px);border-bottom:1px solid rgba(244,63,94,.08);">
+      <div class="flex items-center gap-3">
+        <div class="flex items-center justify-center w-9 h-9 rounded-xl"
+          style="background:rgba(244,63,94,.1);border:1px solid rgba(244,63,94,.15);">
+          🤖
+        </div>
+        <div>
+          <h1 class="font-bold text-sm" style="font-family:'Space Mono',monospace;color:#f43f5e;">ITX ROMEO</h1>
+          <p id="headerPhone" class="text-xs" style="color:#6b7280; font-family:'Space Mono',monospace;"></p>
+        </div>
+      </div>
+      <div id="statusBadge" class="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium"
+        style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.15);color:#86efac;">
+        <div class="dot-online"></div>
+        <span>Connected / منسلک</span>
+      </div>
+    </header>
+
+    <!-- Body -->
+    <main class="max-w-4xl mx-auto px-4 py-6 space-y-4">
+
+      <!-- Stats Row -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 fade-in">
+        <div class="card card-glow p-4 shimmer">
+          <p class="text-xs mb-2" style="color:#6b7280;">Status / حالت</p>
+          <p id="statStatus" class="stat-num text-base font-bold" style="color:#22c55e;">🟢 Online</p>
+        </div>
+        <div class="card card-glow p-4 shimmer">
+          <p class="text-xs mb-2" style="color:#6b7280;">Messages / پیغامات</p>
+          <p id="statMsgs" class="stat-num text-2xl font-bold" style="color:#f43f5e;">0</p>
+        </div>
+        <div class="card card-glow p-4 shimmer">
+          <p class="text-xs mb-2" style="color:#6b7280;">Lookups / تلاش</p>
+          <p id="statLookups" class="stat-num text-2xl font-bold" style="color:#fb923c;">0</p>
+        </div>
+        <div class="card card-glow p-4 shimmer">
+          <p class="text-xs mb-2" style="color:#6b7280;">Uptime / وقت</p>
+          <p id="statUptime" class="stat-num text-2xl font-bold" style="color:#a78bfa;">0m</p>
+        </div>
+      </div>
+
+      <!-- Commands -->
+      <div class="grid md:grid-cols-2 gap-3 fade-in" style="animation-delay:.1s;">
+
+        <!-- AI -->
+        <div class="card card-glow p-5">
+          <h3 class="font-semibold text-sm mb-3 flex items-center gap-2">
+            🧠 <span>AI Commands / اے آئی</span>
+          </h3>
+          <div class="space-y-2.5">
+            <div class="flex items-start gap-2.5">
+              <span class="tag">.ai</span>
+              <span class="text-xs" style="color:#9ca3af;">AI se koi bhi sawal / کوئی بھی سوال</span>
+            </div>
+            <div class="flex items-start gap-2.5">
+              <span class="tag">.roast</span>
+              <span class="text-xs" style="color:#9ca3af;">Kisi ko roast karo / روسٹ کریں</span>
+            </div>
+            <div class="flex items-start gap-2.5">
+              <span class="tag">.joke</span>
+              <span class="text-xs" style="color:#9ca3af;">Funny joke / مزاحیہ جوک</span>
+            </div>
+            <div class="flex items-start gap-2.5">
+              <span class="tag">.quote</span>
+              <span class="text-xs" style="color:#9ca3af;">Motivational quote / حوصلہ افزا</span>
+            </div>
+            <div class="flex items-start gap-2.5">
+              <span class="tag">.shayari</span>
+              <span class="text-xs" style="color:#9ca3af;">Urdu shayari / اردو شاعری</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Lookup -->
+        <div class="card card-glow p-5">
+          <h3 class="font-semibold text-sm mb-3 flex items-center gap-2">
+            🔍 <span>Number Lookup / نمبر تلاش</span>
+          </h3>
+          <div class="space-y-2.5">
+            <div class="flex items-start gap-2.5">
+              <span class="tag">.n</span>
+              <span class="text-xs" style="color:#9ca3af;">SIM + CNIC info / سم اور شناختی کارڈ</span>
+            </div>
+            <div class="flex items-start gap-2.5">
+              <span class="tag">auto</span>
+              <span class="text-xs" style="color:#9ca3af;">Sirf number bhejo — auto lookup / صرف نمبر بھیجیں</span>
+            </div>
+            <div class="mt-2 p-3 rounded-xl" style="background:rgba(251,146,60,.05);border:1px solid rgba(251,146,60,.15);">
+              <p class="text-xs font-semibold mb-1" style="color:#fb923c;">🔰 Number Banned? / نمبر بند ہے؟</p>
+              <a href="https://rmnumber.vercel.app" target="_blank"
+                class="text-xs underline" style="color:#fb7185;">
+                🌐 https://rmnumber.vercel.app
+              </a>
+            </div>
+          </div>
+          <div class="mt-3 pt-3 border-t" style="border-color:rgba(255,255,255,.05);">
+            <h3 class="font-semibold text-sm mb-2 flex items-center gap-2">
+              ⚡ <span>Utilities / یوٹیلٹی</span>
+            </h3>
+            <div class="flex gap-2 flex-wrap">
+              <span class="tag">.ping</span>
+              <span class="tag">.info</span>
+              <span class="tag">.menu</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Controls -->
+      <div class="card card-glow p-5 fade-in" style="animation-delay:.2s;">
+        <h3 class="font-semibold text-sm mb-4 flex items-center gap-2">
+          ⚙️ <span>Controls / کنٹرولز</span>
+        </h3>
+        <div class="flex gap-3 flex-wrap">
+          <button onclick="resetBot()" class="btn-danger px-4 py-2.5 rounded-xl text-sm">
+            🗑️ Reset Session / سیشن ری سیٹ
+          </button>
+          <button onclick="checkStatus()" class="btn-ghost px-4 py-2.5 rounded-xl text-sm">
+            🔄 Refresh / تازہ کریں
+          </button>
+        </div>
+        <p id="ctrlMsg" class="mt-3 text-xs" style="color:#6b7280;min-height:16px;"></p>
+      </div>
+
+    </main>
+  </div>
+
+  <script>
+    let pollTimer;
+
+    async function requestPair() {
+      const phone = document.getElementById('phoneInput').value.trim();
+      if (!phone) return setStatus('⚠️ Number daalo pehle / پہلے نمبر ڈالیں', '#f59e0b');
+      setStatus('⏳ Requesting... / درخواست جاری ہے...', '#60a5fa');
+      try {
+        const r = await fetch('/api/pair', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ phone })
+        });
+        const d = await r.json();
+        if (d.code) {
+          document.getElementById('loginForm').classList.add('hidden');
+          document.getElementById('pairingSection').classList.remove('hidden');
+          document.getElementById('codeDisplay').textContent = d.code;
+          setStatus('', '');
+          startPoll();
+        } else {
+          setStatus('❌ ' + (d.error || 'Failed / ناکام'), '#f87171');
+        }
+      } catch (e) {
+        setStatus('❌ Server error: ' + e.message, '#f87171');
+      }
+    }
+
+    async function resetBot() {
+      if (!confirm('Previous session delete karna chahte ho? / پرانا سیشن ڈیلیٹ کریں؟')) return;
+      const r = await fetch('/api/reset', { method:'POST' });
+      const d = await r.json();
+      if (d.success) {
+        document.getElementById('ctrlMsg').textContent = '✅ Reset ho gaya! / ری سیٹ ہوگیا';
+        setTimeout(() => location.reload(), 1500);
+      }
+    }
+
+    function showLoginForm() {
+      document.getElementById('loginForm').classList.remove('hidden');
+      document.getElementById('pairingSection').classList.add('hidden');
+    }
+
+    function setStatus(msg, color) {
+      const el = document.getElementById('statusMsg');
+      if (el) { el.textContent = msg; el.style.color = color || '#9ca3af'; }
+      const el2 = document.getElementById('statusMsg2');
+      if (el2) { el2.textContent = msg; el2.style.color = color || '#9ca3af'; }
+    }
+
+    function startPoll() {
+      clearInterval(pollTimer);
+      pollTimer = setInterval(checkStatus, 2500);
+    }
+
+    async function checkStatus() {
+      try {
+        const r = await fetch('/api/status');
+        const d = await r.json();
+        if (d.connected) {
+          clearInterval(pollTimer);
+          document.getElementById('loginScreen').classList.add('hidden');
+          document.getElementById('dashboard').classList.remove('hidden');
+          document.getElementById('headerPhone').textContent = '+' + (d.phone || '');
+          document.getElementById('statMsgs').textContent    = d.msgCount    || 0;
+          document.getElementById('statLookups').textContent = d.lookupCount || 0;
+          if (d.uptimeMs) {
+            const mins = Math.floor(d.uptimeMs / 60000);
+            const hrs  = Math.floor(mins / 60);
+            document.getElementById('statUptime').textContent = hrs > 0 ? hrs + 'h ' + (mins % 60) + 'm' : mins + 'm';
+          }
+          startPoll(); // keep refreshing stats
+        }
+      } catch (_) {}
+    }
+
+    checkStatus();
+    startPoll();
+  </script>
+</body>
+</html>`;
+
+// ── Serve dashboard at /
+app.get('*', (req, res) => res.send(DASHBOARD_HTML));
+
+// ── API: Status
+app.get('/api/status', (req, res) => {
+  res.json({
+    connected   : botStatus.connected,
+    phone       : botStatus.phone,
+    msgCount    : botStatus.msgCount,
+    lookupCount : botStatus.lookupCount,
+    uptimeMs    : botStatus.uptime ? Date.now() - botStatus.uptime : 0
+  });
+});
+
+// ── API: Request pairing code
+app.post('/api/pair', async (req, res) => {
+  const { phone } = req.body || {};
+  if (!phone) return res.json({ error: 'Phone number required / نمبر ضروری ہے' });
+  const clean = phone.replace(/[^0-9]/g, '');
+  if (!sock)              return res.json({ error: 'Bot initializing, thodi der mein try karo' });
+  if (botStatus.connected) return res.json({ error: 'Already connected / پہلے سے جڑا ہوا ہے' });
+  try {
+    const code = await sock.requestPairingCode(clean);
+    res.json({ code });
+  } catch (e) {
+    res.json({ error: e.message });
+  }
+});
+
+// ── API: Reset session
+app.post('/api/reset', (req, res) => {
+  try {
+    if (fs.existsSync('./auth_info')) fs.rmSync('./auth_info', { recursive: true, force: true });
+    botStatus = { connected: false, phone: '', uptime: null, msgCount: 0, lookupCount: 0 };
+    res.json({ success: true });
+    setTimeout(() => { if (sock) { try { sock.end(); } catch (_) {} } startBot(); }, 500);
+  } catch (e) {
+    res.json({ error: e.message });
+  }
+});
+
+app.listen(PORT, () => console.log(`\n🌐 Dashboard → http://localhost:${PORT}\n`));
+
+// ════════════════════════════════════════════════════════════════
+//  🧠  GROK AI
+// ════════════════════════════════════════════════════════════════
 const GROK_URL   = 'https://grok-api-red.vercel.app/chat/completions';
 const GROK_MODEL = 'grok-4.1-fast';
 
 async function getAI(prompt, temp = 0.7) {
-    try {
-        const res  = await fetch(GROK_URL, {
-            method : 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body   : JSON.stringify({ model: GROK_MODEL, messages: [{ role: 'user', content: prompt }], temperature: temp })
-        });
-        const data = await res.json();
-        if (data.choices) return data.choices[0].message.content;
-        throw new Error(JSON.stringify(data));
-    } catch (e) {
-        console.error('AI Error:', e.message);
-        return '❌ *𝐄𝐫𝐫𝐨𝐫:* AI server busy hai, thodi der baad try karo!';
-    }
+  try {
+    const r = await fetch(GROK_URL, {
+      method : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body   : JSON.stringify({ model: GROK_MODEL, messages: [{ role: 'user', content: prompt }], temperature: temp })
+    });
+    const d = await r.json();
+    if (d.choices) return d.choices[0].message.content;
+    throw new Error(JSON.stringify(d));
+  } catch (e) {
+    return '❌ *Error / غلطی:* AI server busy hai, thodi der baad try karo!\nاے آئی سرور مصروف ہے۔';
+  }
 }
 
-// ═══════════════════════════════════════════════
-// 🔍 NUMBER LOOKUP
-// ═══════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
+//  🔍  NUMBER LOOKUP + CNIC SEARCH
+// ════════════════════════════════════════════════════════════════
 function normalizeNumber(raw) {
-    let n = raw.replace(/[^0-9]/g, '');
-    if      (n.startsWith('0'))                    n = '92' + n.slice(1);
-    else if (n.startsWith('3') && n.length === 10) n = '92' + n;
-    return n;
+  let n = raw.replace(/[^0-9]/g, '');
+  if      (n.startsWith('0') && n.length === 11) n = '92' + n.slice(1);
+  else if (n.startsWith('3') && n.length === 10) n = '92' + n;
+  else if (n.startsWith('0092'))                 n = n.slice(2);
+  return n;
+}
+
+// Detect any Pakistani mobile number in a message
+const PK_NUM_RE = /(?:\+92|0092|92|0)[\s\-.]?3\d{2}[\s\-.]?\d{3}[\s\-.]?\d{4}/g;
+function extractPKNumber(text) {
+  const m = text.match(PK_NUM_RE);
+  return m ? m[0] : null;
+}
+
+async function fetchSIMData(queryParam) {
+  const r = await fetch(`https://ramzan-simdata.deno.dev/?${queryParam}`);
+  return r.json();
+}
+
+function formatRecord(d, idx, prefix = '🔹') {
+  const addr = (!d.address || ['NULL','no','N/A'].includes(d.address)) ? 'N/A' : d.address;
+  return (
+    `*${prefix} Record #${idx + 1} / ریکارڈ نمبر ${idx + 1}*\n` +
+    `  *📞 Number / نمبر:* +${d.number}\n` +
+    `  *👤 Name / نام:* ${d.name}\n` +
+    `  *🪪 CNIC / شناختی کارڈ:* ${d.cnic}\n` +
+    `  *📍 Address / پتہ:* ${addr}\n`
+  );
+}
+
+function dedupe(arr) {
+  const seen = new Set();
+  return arr.filter(d => seen.has(d.number) ? false : (seen.add(d.number), true));
 }
 
 async function lookupNumber(rawNum) {
-    try {
-        const num  = normalizeNumber(rawNum);
-        const res  = await fetch(`https://ramzan-simdata.deno.dev/?number=${num}`);
-        const data = await res.json();
-        if (!data.success || !data.data?.length) return `❌ *𝐍𝐨𝐭 𝐅𝐨𝐮𝐧𝐝:* +${num}`;
-        const seen   = new Set();
-        const unique = data.data.filter(d => seen.has(d.number) ? false : (seen.add(d.number), true));
-        let txt  = `╔═══════════════════╗\n`;
-            txt += `║  📱 *𝐍𝐔𝐌𝐁𝐄𝐑 𝐋𝐎𝐎𝐊𝐔𝐏*  ║\n`;
-            txt += `╚═══════════════════╝\n\n`;
-            txt += `*🔍 Query:* +${data.query_number}\n`;
-            txt += `*🪪 CNIC:* ${data.linked_cnic}\n`;
-            txt += `*📊 Total SIMs:* ${data.total_sims_found}\n`;
-            txt += `━━━━━━━━━━━━━━━━━━━━\n\n`;
-        unique.forEach((d, i) => {
-            const addr = (!d.address || d.address === 'NULL' || d.address === 'no') ? 'N/A' : d.address;
-            txt += `*🔹 SIM #${i + 1}*\n`;
-            txt += `  *📞 Number:* +${d.number}\n`;
-            txt += `  *👤 Name:* ${d.name}\n`;
-            txt += `  *🪪 CNIC:* ${d.cnic}\n`;
-            txt += `  *📍 Address:* ${addr}\n\n`;
+  try {
+    const num  = normalizeNumber(rawNum);
+    const data = await fetchSIMData(`number=${num}`);
+
+    if (!data.success || !data.data?.length) {
+      return (
+        `╔══════════════════════╗\n` +
+        `║ 📱 *NUMBER LOOKUP / نمبر تلاش* ║\n` +
+        `╚══════════════════════╝\n\n` +
+        `❌ *Not Found / نہیں ملا*\n` +
+        `*📞 Number / نمبر:* +${num}\n\n` +
+        `*🔰 Number Banned? / نمبر بند ہے؟*\n` +
+        `Check here / یہاں چیک کریں:\n` +
+        `🌐 https://rmnumber.vercel.app\n\n` +
+        `— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`
+      );
+    }
+
+    const cnic    = data.linked_cnic;
+    const records = dedupe(data.data);
+
+    let txt = '';
+    txt += `╔══════════════════════╗\n`;
+    txt += `║ 📱 *NUMBER LOOKUP / نمبر تلاش* ║\n`;
+    txt += `╚══════════════════════╝\n\n`;
+    txt += `*🔍 Query / تلاش:* +${data.query_number || num}\n`;
+    txt += `*🪪 CNIC / شناختی کارڈ:* ${cnic}\n`;
+    txt += `*📊 Total SIMs / کل سمز:* ${data.total_sims_found}\n`;
+    txt += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    records.forEach((d, i) => {
+      txt += formatRecord(d, i, '🔹') + '\n';
+    });
+
+    // ── CNIC Search
+    if (cnic && !['N/A', 'NULL', 'null', 'undefined'].includes(String(cnic))) {
+      const cnicData = await fetchSIMData(`cnic=${cnic}`).catch(() => null);
+      if (cnicData?.success && cnicData.data?.length) {
+        const cnicRecords = dedupe(cnicData.data);
+        txt += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+        txt += `*🪪 CNIC Ke Saray Numbers / شناختی کارڈ کے تمام نمبر*\n`;
+        txt += `*CNIC / شناختی کارڈ:* ${cnic}\n\n`;
+        cnicRecords.forEach((d, i) => {
+          txt += formatRecord(d, i, '🔸') + '\n';
         });
-        txt += `— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`;
-        return txt;
-    } catch (e) {
-        console.error('Lookup error:', e.message);
-        return '❌ *𝐋𝐨𝐨𝐤𝐮𝐩 𝐅𝐚𝐢𝐥𝐞𝐝:* Server se connect nahi ho saka.';
+      }
     }
+
+    txt += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+    txt += `*🔰 Number Banned? / نمبر بند ہے؟*\n`;
+    txt += `🌐 https://rmnumber.vercel.app\n\n`;
+    txt += `— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`;
+
+    botStatus.lookupCount++;
+    return txt;
+
+  } catch (e) {
+    console.error('Lookup error:', e.message);
+    return (
+      `❌ *Lookup Failed / تلاش ناکام*\n` +
+      `Server se connect nahi ho saka.\n` +
+      `سرور سے رابطہ نہیں ہوسکا۔\n\n` +
+      `— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`
+    );
+  }
 }
 
-// ═══════════════════════════════════════════════
-// 🎮 FUN DATA
-// ═══════════════════════════════════════════════
-const EIGHT_BALL = [
-    '✅ *Bilkul haan!*', '✅ *Pakka haan!*', '✅ *Bilkul sahi!*',
-    '✅ *100% hoga!*', '🤔 *Shayad...*', '🤔 *Abhi clear nahi.*',
-    '🤔 *Baad mein poochho.*', '❌ *Nahi lagta.*', '❌ *Bilkul nahi!*',
-    '❌ *Aisa mat socho!*', '🔮 *Kismat theek karo pehle.*', '🎯 *Dil se socho...*'
-];
-const TRUTHS = [
-    'Kabhi kisi se pyaar hua hai? 💕',
-    'Life ka sabse bada jhooth kab bola? 🤥',
-    'Kisi ki back mein burai ki hai? 😏',
-    'Kab roya tha last time aur kyun? 😢',
-    'Kisi ka number save hai secretly? 👀',
-    'Kya koi secret crush hai abhi? 🫣',
-    'Kabhi exam mein cheating ki? 📝',
-    'Kab parents se chhupa ke kuch kiya? 🤫'
-];
-const DARES = [
-    'Agle 5 messages mein sirf emojis use karo! 😂',
-    'Group mein apni embarrassing photo bhejo! 📸',
-    'Kisi bhi group member ko "best friend" bol diya aaj! 🤝',
-    'Apna status "Main bewaqoof hoon" likh do 5 min ke liye! 😜',
-    'Kisi ek member ko genuine compliment do! 💯',
-    'Apna ringtone wala gana gao aur voice note bhejo! 🎵',
-    'Agle ek ghante mein sirf formal language use karo! 🎩',
-    'Group mein apna ek DM screenshot share karo (edited ok hai)! 📱'
+// ════════════════════════════════════════════════════════════════
+//  🧘  HUMAN-LIKE BEHAVIOR  (anti-ban)
+// ════════════════════════════════════════════════════════════════
+const DELAYS = [
+  [400,  900],   // fast reply
+  [800,  1800],  // normal
+  [1200, 2500],  // thinking
 ];
 
-// ═══════════════════════════════════════════════
-// 🔧 BOT HELPER
-// ═══════════════════════════════════════════════
-function getBotJid(sock) {
-    // sock.user.id can be "923001234567:8@s.whatsapp.net" or "923001234567@s.whatsapp.net"
-    const raw = sock.user?.id || '';
-    const num = raw.split(':')[0].split('@')[0];
-    return num + '@s.whatsapp.net';
+async function humanDelay(tier = 1) {
+  const [min, max] = DELAYS[tier];
+  const ms = Math.floor(Math.random() * (max - min)) + min;
+  await new Promise(r => setTimeout(r, ms));
 }
 
-// ═══════════════════════════════════════════════
-// 🚀 BOT START
-// ═══════════════════════════════════════════════
+async function sendWithPresence(sockInst, jid, text, quoted) {
+  try { await sockInst.sendPresenceUpdate('composing', jid); } catch (_) {}
+  await humanDelay(Math.floor(Math.random() * 3));
+  try { await sockInst.sendPresenceUpdate('paused', jid); } catch (_) {}
+  return sockInst.sendMessage(jid, { text }, quoted ? { quoted } : {});
+}
+
+// ════════════════════════════════════════════════════════════════
+//  🚀  BOT START
+// ════════════════════════════════════════════════════════════════
 async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-    const { version }          = await fetchLatestBaileysVersion();
+  const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+  const { version }          = await fetchLatestBaileysVersion();
 
-    const sock = makeWASocket({
-        version,
-        auth             : state,
-        printQRInTerminal: false,
-        logger           : pino({ level: 'silent' }),
-        browser          : Browsers.ubuntu('Chrome'),
-        syncFullHistory  : false
-    });
+  sock = makeWASocket({
+    version,
+    auth             : state,
+    printQRInTerminal: false,
+    logger           : pino({ level: 'silent' }),
+    browser          : Browsers.ubuntu('Chrome'),
+    syncFullHistory  : false,
+    getMessage       : async () => ({ conversation: '' })
+  });
 
-    if (!sock.authState.creds.me?.id) {
-        setTimeout(async () => {
-            const phone = await question('WhatsApp Number (92xxx): ');
-            const code  = await sock.requestPairingCode(phone.trim());
-            console.log(`\n📲 PAIRING CODE: ${code}\n`);
-        }, 2000);
+  sock.ev.on('creds.update', saveCreds);
+
+  sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
+    if (connection === 'open') {
+      botStatus.connected = true;
+      botStatus.uptime    = Date.now();
+      botStatus.phone     = (sock.user?.id || '').split(':')[0].split('@')[0];
+      console.log('🔥 Bot Live! Dashboard → http://localhost:' + PORT);
     }
-
-    sock.ev.on('creds.update', saveCreds);
-    sock.ev.on('connection.update', ({ connection }) => {
-        if (connection === 'close') setTimeout(startBot, 3000);
-        if (connection === 'open')  console.log('🔥 Bot Live! 𝐈𝐭𝐱 𝐑𝐎𝐌𝐄𝐎 scene on hai!');
-    });
-
-    // ─────────────────────────────────────
-    // 🔒 GROUP META HELPER
-    // ─────────────────────────────────────
-    async function getGroupInfo(groupJid) {
-        try {
-            const meta    = await sock.groupMetadata(groupJid);
-            const admins  = meta.participants.filter(p => p.admin).map(p => p.id);
-            const botJid  = getBotJid(sock);
-            const botIsAdmin = admins.some(a => a.split(':')[0].split('@')[0] === botJid.split('@')[0]);
-            return { meta, admins, botJid, botIsAdmin };
-        } catch (_) {
-            return { meta: null, admins: [], botJid: getBotJid(sock), botIsAdmin: false };
-        }
+    if (connection === 'close') {
+      botStatus.connected = false;
+      const code = lastDisconnect?.error?.output?.statusCode;
+      if (code !== DisconnectReason.loggedOut) {
+        console.log('⚡ Reconnecting...');
+        setTimeout(startBot, 4000);
+      } else {
+        console.log('🔴 Logged out. Open dashboard to reconnect.');
+      }
     }
+  });
 
-    // ─────────────────────────────────────
-    // ⚠️ VIOLATION HANDLER
-    // ─────────────────────────────────────
-    async function handleViolation(groupJid, userJid, msg, type) {
-        const userNum  = userJid.split('@')[0];
-        const count    = addWarn(groupJid, userJid, type);
-        const MAX_WARN = 3;
-        const remaining = MAX_WARN - count;
-        const { botIsAdmin } = await getGroupInfo(groupJid);
+  // ─────────────────────────────────────────────────────────
+  //  💬  MESSAGE HANDLER
+  // ─────────────────────────────────────────────────────────
+  sock.ev.on('messages.upsert', async ({ messages }) => {
+    try {
+      const msg = messages[0];
+      if (!msg.message || msg.key.remoteJid === 'status@broadcast') return;
 
-        if (count >= MAX_WARN) {
-            resetWarn(groupJid, userJid);
-            await sock.sendMessage(groupJid, {
-                text: `🚫 *@${userNum} ko group se nikal diya gaya!*\n\n` +
-                      `*⚡ Wajah:* ${type === 'link' ? '🔗 Link share karna' : '🤬 Gandi zuban'}\n` +
-                      `*📊 Warnings:* 3/3 — Limit cross!\n\n` +
-                      `— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`,
-                mentions: [userJid]
+      const from     = msg.key.remoteJid;
+      const isGroup  = from.endsWith('@g.us');
+      const isFromMe = msg.key.fromMe;
+      const sender   = isGroup ? (msg.key.participant || '') : from;
+
+      const body = msg.message;
+      const text = (
+        body.conversation                                ||
+        body.extendedTextMessage?.text                   ||
+        body.imageMessage?.caption                       ||
+        body.videoMessage?.caption                       ||
+        body.buttonsResponseMessage?.selectedDisplayText ||
+        body.listResponseMessage?.title                  || ''
+      ).trim();
+
+      if (!text) return;
+
+      botStatus.msgCount++;
+
+      // Mark read + small delay (human-like)
+      try { await sock.readMessages([msg.key]); } catch (_) {}
+      await humanDelay(0);
+
+      const reply = (t) => sendWithPresence(sock, from, t, msg);
+      const quoted = body.extendedTextMessage?.contextInfo?.participant;
+
+      // ─────────────────────────────────────────────
+      //  COMMANDS  (start with .)
+      // ─────────────────────────────────────────────
+      if (text.startsWith('.')) {
+        const parts   = text.slice(1).trim().split(/ +/);
+        const command = parts.shift().toLowerCase();
+        const args    = parts;
+
+        switch (command) {
+
+          // ── .n  (number lookup)
+          case 'n': {
+            // Support: .n 03001234567  |  .n 0300 1234567  |  .n +92 300 1234567
+            const raw = args.join('').replace(/[\s\-\.]/g, '');
+            if (!raw) return reply(
+              `❌ *Usage / استعمال:*\n` +
+              `\`.n 03001234567\`\n` +
+              `\`.n +92 300 1234567\`\n` +
+              `\`.n 923001234567\`\n\n` +
+              `_Ya sirf number bhejo — auto lookup hoga! / یا صرف نمبر بھیجیں!_`
+            );
+            await reply('🔍 *Searching... / تلاش جاری ہے...*');
+            reply(await lookupNumber(raw));
+            break;
+          }
+
+          // ── .ai
+          case 'ai': {
+            if (!args.length) return reply(
+              `❌ *Sawal likh bhai! / سوال لکھیں!*\n*Usage:* \`.ai <sawal>\``
+            );
+            await reply('🧠 *Soch raha hun... / سوچ رہا ہوں...*');
+            const res = await getAI(
+              `Tera owner "𝐈𝐭𝐱 𝐑𝐎𝐌𝐄𝐎" hai. Sawal: "${args.join(' ')}". Roman Urdu mein jawab de, clear aur short.`
+            );
+            reply(`${res}\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`);
+            break;
+          }
+
+          // ── .roast
+          case 'roast': {
+            await reply('🔥 *Roasting... / روسٹ ہو رہا ہے...*');
+            const target = quoted ? `@${quoted.split('@')[0]}` : 'is banda';
+            const res    = await getAI(
+              `Ek zabardast Roman Urdu roast likho ${target} ke liye. Sirf 2-3 lines. Street style. Emojis daalo.`, 0.9
+            );
+            await sock.sendMessage(from, {
+              text    : `${res}\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`,
+              mentions: quoted ? [quoted] : []
             }, { quoted: msg });
+            break;
+          }
 
-            if (botIsAdmin) {
-                try { await sock.groupParticipantsUpdate(groupJid, [userJid], 'remove'); }
-                catch (_) { await sock.sendMessage(groupJid, { text: '❌ *Kick nahi hua — wo admin hai ya protected hai.*' }); }
-            }
-        } else {
-            const emoji  = type === 'link' ? '🔗' : '🤬';
-            const reason = type === 'link' ? 'Link share karna mana hai!' : 'Gandi zuban use karna mana hai!';
-            await sock.sendMessage(groupJid, {
-                text: `┌─── ⚠️ *WARNING* ───┐\n\n` +
-                      `👤 *@${userNum}*\n` +
-                      `${emoji} *Wajah:* ${reason}\n` +
-                      `📊 *Count:* ${count}/${MAX_WARN}\n` +
-                      `⏳ *Bacha:* ${remaining} warning${remaining > 1 ? 's' : ''}\n\n` +
-                      `_${count === 2 ? '🔴 Agli baar seedha KICK!' : '🟡 Sambhal ke raho!'}_\n\n` +
-                      `└─────────────────┘\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`,
-                mentions: [userJid]
-            }, { quoted: msg });
+          // ── .joke
+          case 'joke': {
+            await reply('😂 *Joke loading... / جوک آرہا ہے...*');
+            const res = await getAI(`Ek funny Roman Urdu joke sunao. Sirf 2-3 lines. Emojis lazmi.`, 0.9);
+            reply(`${res}\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`);
+            break;
+          }
+
+          // ── .quote
+          case 'quote': {
+            await reply('💭 *Soch raha hun... / سوچ رہا ہوں...*');
+            const res = await getAI(`Ek powerful motivational quote Roman Urdu mein. Bold. Max 3 lines.`, 0.8);
+            reply(`${res}\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`);
+            break;
+          }
+
+          // ── .shayari
+          case 'shayari': {
+            await reply('🌹 *Shayari likh raha hun... / شاعری لکھ رہا ہوں...*');
+            const res = await getAI(`Ek khoobsurat romantic ya dard bhari Urdu shayari. 4 lines.`, 0.9);
+            reply(`${res}\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`);
+            break;
+          }
+
+          // ── .ping
+          case 'ping': {
+            const lat = Math.abs(Date.now() - msg.messageTimestamp * 1000);
+            const up  = process.uptime();
+            const h   = Math.floor(up / 3600);
+            const m   = Math.floor((up % 3600) / 60);
+            const s   = Math.floor(up % 60);
+            const spd = lat < 100 ? '🟢 Fast' : lat < 500 ? '🟡 Medium' : '🔴 Slow';
+            reply(
+              `╔══ 🏓 *PING* 🏓 ══╗\n\n` +
+              `*⚡ Latency / رفتار:* ${lat}ms ${spd}\n` +
+              `*⏱️ Uptime / وقت:* ${h}h ${m}m ${s}s\n` +
+              `*🚀 Status / حالت:* Online ✅\n\n` +
+              `╚═════════════════╝\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`
+            );
+            break;
+          }
+
+          // ── .info
+          case 'info':
+            reply(
+              `╔══ 🤖 *BOT INFO / بوٹ معلومات* 🤖 ══╗\n\n` +
+              `*👨‍💻 Creator / بنانے والا:* 𝐈𝐭𝐱 𝐑𝐎𝐌𝐄𝐎\n` +
+              `*🚀 Version / ورژن:* 4.0 Pro\n` +
+              `*🧠 AI:* Grok (${GROK_MODEL})\n` +
+              `*🔍 Lookup / تلاش:* SIM + CNIC Data\n` +
+              `*🛡️ Anti-Ban / بین سے بچاؤ:* Human-like\n` +
+              `*⚡ System / سسٹم:* Running Smooth ✅\n\n` +
+              `╚══════════════════════════╝\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`
+            );
+            break;
+
+          // ── .menu / .help
+          case 'menu':
+          case 'help':
+            reply(
+              `╔════════════════════════╗\n` +
+              `║  🤖 *𝐈𝐓𝐗 𝐑𝐎𝐌𝐄𝐎 𝐌𝐄𝐍𝐔*   ║\n` +
+              `╚════════════════════════╝\n\n` +
+
+              `*🧠 AI COMMANDS / اے آئی*\n` +
+              `┣ *.ai* [sawal] — AI se poochho / سوال پوچھیں\n` +
+              `┣ *.roast* — Kisi ko roast karo / روسٹ کریں\n` +
+              `┣ *.joke* — Funny joke / مزاحیہ جوک\n` +
+              `┣ *.quote* — Motivational quote / اقتباس\n` +
+              `┗ *.shayari* — Urdu shayari / شاعری\n\n` +
+
+              `*🔍 LOOKUP / نمبر تلاش*\n` +
+              `┣ *.n* [number] — SIM + CNIC info\n` +
+              `┗ _Ya sirf number bhejo! / صرف نمبر بھیجیں!_ 📲\n\n` +
+
+              `*🔰 Number Banned? / نمبر بند ہے؟*\n` +
+              `┗ 🌐 https://rmnumber.vercel.app\n\n` +
+
+              `*⚡ UTILS / یوٹیلٹی*\n` +
+              `┣ *.ping* — Speed check / رفتار\n` +
+              `┗ *.info* — Bot info / بوٹ معلومات\n\n` +
+
+              `╚════════════════════════╝\n` +
+              `— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`
+            );
+            break;
         }
 
-        if (botIsAdmin) {
-            try { await sock.sendMessage(groupJid, { delete: msg.key }); } catch (_) {}
-        }
+        return; // command handled
+      }
+
+      // ─────────────────────────────────────────────
+      //  AUTO NUMBER DETECTION  (no command needed)
+      //  — any format: 0300..., +92 3..., 923...
+      // ─────────────────────────────────────────────
+      const detected = extractPKNumber(text);
+      if (detected) {
+        await reply('🔍 *Searching... / تلاش جاری ہے...*');
+        reply(await lookupNumber(detected));
+      }
+
+    } catch (e) {
+      console.error('MSG Error:', e.message);
     }
-
-    // ─────────────────────────────────────
-    // 👋 WELCOME / LEAVE
-    // ─────────────────────────────────────
-    sock.ev.on('group-participants.update', async ({ id, participants, action }) => {
-        if (settings.lockedJid && id !== settings.lockedJid) return;
-        for (const participant of participants) {
-            try {
-                const num     = (typeof participant === 'string' ? participant : participant.id) || '';
-                const userNum = num.split('@')[0];
-                if (action === 'add') {
-                    await sock.sendMessage(id, {
-                        text    : `╔══ 🎉 *WELCOME* 🎉 ══╗\n\n` +
-                                  `*👋 Aagaye @${userNum}!*\n\n` +
-                                  `📌 Rules zaroor parho\n` +
-                                  `😊 Enjoy karo group!\n\n` +
-                                  `╚══ 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺 ══╝`,
-                        mentions: [num]
-                    });
-                } else if (action === 'remove' || action === 'leave') {
-                    await sock.sendMessage(id, {
-                        text    : `╔══ 👋 *ALVIDA* 👋 ══╗\n\n` +
-                                  `*@${userNum} chale gaye* 😢\n\n` +
-                                  `_Group unhe miss karega... maybe!_ 😂\n\n` +
-                                  `╚══ 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺 ══╝`,
-                        mentions: [num]
-                    });
-                }
-            } catch (_) {}
-        }
-    });
-
-    // ─────────────────────────────────────
-    // 💬 MESSAGE HANDLER
-    // ─────────────────────────────────────
-    sock.ev.on('messages.upsert', async ({ messages }) => {
-        try {
-            const msg = messages[0];
-            if (!msg.message || msg.key.remoteJid === 'status@broadcast') return;
-
-            const from     = msg.key.remoteJid;
-            const isGroup  = from.endsWith('@g.us');
-            const isFromMe = msg.key.fromMe;
-            const sender   = isGroup ? (msg.key.participant || '') : from;
-
-            const body = msg.message;
-            const text =
-                body.conversation                                ||
-                body.extendedTextMessage?.text                   ||
-                body.imageMessage?.caption                       ||
-                body.videoMessage?.caption                       ||
-                body.buttonsResponseMessage?.selectedDisplayText ||
-                body.listResponseMessage?.title                  || '';
-
-            // ── AUTO-MOD (groups only, non-admin, non-owner)
-            if (isGroup && !isFromMe && text) {
-                const { admins } = await getGroupInfo(from);
-                const senderIsAdmin = admins.some(a => a.split(':')[0].split('@')[0] === sender.split(':')[0].split('@')[0]);
-
-                if (!senderIsAdmin) {
-                    if (containsLink(text))  { await handleViolation(from, sender, msg, 'link');  return; }
-                    if (containsAbuse(text)) { await handleViolation(from, sender, msg, 'abuse'); return; }
-                }
-            }
-
-            if (!text.startsWith('.')) return;
-            if (!isFromMe && isGroup && settings.lockedJid && from !== settings.lockedJid) return;
-
-            const reply = (t) => sock.sendMessage(from, { text: t }, { quoted: msg });
-
-            // ── ADMIN / SENDER CHECK
-            let isBotAdmin = false, isSenderAdmin = false;
-            if (isGroup) {
-                const { admins, botJid } = await getGroupInfo(from);
-                // Check sender admin — normalize JID for comparison
-                const senderNum = sender.split(':')[0].split('@')[0];
-                isSenderAdmin   = isFromMe || admins.some(a => a.split(':')[0].split('@')[0] === senderNum);
-                isBotAdmin      = admins.some(a => a.split(':')[0].split('@')[0] === botJid.split('@')[0]);
-            }
-
-            const NOT_ADMIN  = `╔═══════════════════╗\n❌ *𝐀𝐃𝐌𝐈𝐍 𝐎𝐍𝐋𝐘!*\n╚═══════════════════╝\n\n🚫 *You are not admin!*\nYe command sirf admins ke liye hai bhai.\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`;
-            const BOT_NO_ADM = `╔═══════════════════╗\n⚠️ *𝐁𝐎𝐓 𝐀𝐃𝐌𝐈𝐍 𝐂𝐇𝐀𝐇𝐈𝐘𝐄!*\n╚═══════════════════╝\n\n🔧 Bot ko admin banao pehle taake ye command kaam kare!\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`;
-
-            const args    = text.slice(1).trim().split(/ +/);
-            const command = args.shift().toLowerCase();
-            const quoted  = body.extendedTextMessage?.contextInfo?.participant;
-
-            // ═══════════════════════════════════
-            // COMMANDS
-            // ═══════════════════════════════════
-            switch (command) {
-
-                // ── OWNER ONLY
-                case 'setjid':
-                    if (!isFromMe) return;
-                    settings.lockedJid = from; saveSettings();
-                    reply('🔒 *𝐆𝐫𝐨𝐮𝐩 𝐋𝐨𝐜𝐤𝐞𝐝!* — Bot sirf is group mein active hai.');
-                    break;
-
-                case 'resetjid':
-                    if (!isFromMe) return;
-                    settings.lockedJid = null; saveSettings();
-                    reply('🔓 *𝐔𝐧𝐥𝐨𝐜𝐤𝐞𝐝!* — Bot ab sab jagah active hai.');
-                    break;
-
-                // ── ADMIN: TAGALL
-                case 'tagall': {
-                    if (!isSenderAdmin) return reply(NOT_ADMIN);
-                    const { meta } = await getGroupInfo(from);
-                    const users    = meta.participants.map(u => u.id);
-                    let   txt      = `╔══ 📣 *TAG ALL* 📣 ══╗\n\n`;
-                    if (args.length) txt += `*📢 Notice:* ${args.join(' ')}\n\n`;
-                    users.forEach(u => txt += `👤 @${u.split('@')[0]}\n`);
-                    txt += `\n╚══ 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺 ══╝`;
-                    await sock.sendMessage(from, { text: txt, mentions: users });
-                    break;
-                }
-
-                // ── ADMIN: KICK
-                case 'kick': {
-                    if (!isSenderAdmin) return reply(NOT_ADMIN);
-                    if (!isBotAdmin)    return reply(BOT_NO_ADM);
-
-                    let target = quoted;
-                    if (!target && args[0]) target = normalizeNumber(args[0]) + '@s.whatsapp.net';
-                    if (!target) return reply(
-                        `*📖 Usage:* \`.kick 923001234567\`\n_Ya kisi ka reply karke .kick likho_`
-                    );
-                    try {
-                        await sock.groupParticipantsUpdate(from, [target], 'remove');
-                        await sock.sendMessage(from, {
-                            text    : `👢 *@${target.split('@')[0]} ko kick kar diya!* Bye bye! 😂\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`,
-                            mentions: [target]
-                        });
-                    } catch (_) { reply('❌ *Kick nahi hua* — wo admin hai ya protected!'); }
-                    break;
-                }
-
-                // ── ADMIN: KICKALL
-                case 'kickall': {
-                    if (!isSenderAdmin) return reply(NOT_ADMIN);
-                    if (!isBotAdmin)    return reply(BOT_NO_ADM);
-                    const { meta, admins, botJid } = await getGroupInfo(from);
-                    const botNum = botJid.split('@')[0];
-                    const toKick = meta.participants
-                        .filter(p => {
-                            const n = p.id.split(':')[0].split('@')[0];
-                            const isAdmin = admins.some(a => a.split(':')[0].split('@')[0] === n);
-                            return !isAdmin && n !== botNum;
-                        })
-                        .map(p => p.id);
-
-                    if (!toKick.length) return reply('🤷 *Koi nahi hai kick karne ke liye!*');
-                    await reply(`⚡ *${toKick.length} logon ko kick kar raha hun...*`);
-                    let kicked = 0;
-                    for (const uid of toKick) {
-                        try {
-                            await sock.groupParticipantsUpdate(from, [uid], 'remove');
-                            kicked++;
-                            await new Promise(r => setTimeout(r, 700));
-                        } catch (_) {}
-                    }
-                    reply(`✅ *${kicked}/${toKick.length} log kick ho gaye!* Group saaf!\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`);
-                    break;
-                }
-
-                // ── ADMIN: ADD
-                case 'add': {
-                    if (!isSenderAdmin) return reply(NOT_ADMIN);
-                    if (!isBotAdmin)    return reply(BOT_NO_ADM);
-                    if (!args[0]) return reply(`*📖 Usage:* \`.add 923001234567\``);
-                    const numToAdd = normalizeNumber(args[0]) + '@s.whatsapp.net';
-                    try {
-                        await sock.groupParticipantsUpdate(from, [numToAdd], 'add');
-                        await sock.sendMessage(from, {
-                            text    : `✅ *@${numToAdd.split('@')[0]} ko group mein add kar diya!* 🎉\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`,
-                            mentions: [numToAdd]
-                        });
-                    } catch (e) {
-                        reply(`❌ *Add nahi hua!*\n_Wajah: ${e.message || 'Number invalid ya privacy issue'}_`);
-                    }
-                    break;
-                }
-
-                // ── ADMIN: PROMOTE
-                case 'promote': {
-                    if (!isSenderAdmin) return reply(NOT_ADMIN);
-                    if (!isBotAdmin)    return reply(BOT_NO_ADM);
-                    const target = quoted || (args[0] ? normalizeNumber(args[0]) + '@s.whatsapp.net' : null);
-                    if (!target) return reply(`*📖 Usage:* \`.promote 923001234567\` ya reply karo`);
-                    try {
-                        await sock.groupParticipantsUpdate(from, [target], 'promote');
-                        await sock.sendMessage(from, {
-                            text    : `⭐ *@${target.split('@')[0]} ab Admin ban gaya!* Mubarak! 🎉\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`,
-                            mentions: [target]
-                        });
-                    } catch (_) { reply('❌ *Promote nahi hua!*'); }
-                    break;
-                }
-
-                // ── ADMIN: DEMOTE
-                case 'demote': {
-                    if (!isSenderAdmin) return reply(NOT_ADMIN);
-                    if (!isBotAdmin)    return reply(BOT_NO_ADM);
-                    const target = quoted || (args[0] ? normalizeNumber(args[0]) + '@s.whatsapp.net' : null);
-                    if (!target) return reply(`*📖 Usage:* \`.demote 923001234567\` ya reply karo`);
-                    try {
-                        await sock.groupParticipantsUpdate(from, [target], 'demote');
-                        await sock.sendMessage(from, {
-                            text    : `📉 *@${target.split('@')[0]} ka admin status le liya gaya.* 😬\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`,
-                            mentions: [target]
-                        });
-                    } catch (_) { reply('❌ *Demote nahi hua!*'); }
-                    break;
-                }
-
-                // ── ADMIN: MUTE / UNMUTE
-                case 'mute': {
-                    if (!isSenderAdmin) return reply(NOT_ADMIN);
-                    if (!isBotAdmin)    return reply(BOT_NO_ADM);
-                    try {
-                        await sock.groupSettingUpdate(from, 'announcement');
-                        reply('🔇 *Group Mute kar diya!* Sirf admins likh sakte hain.\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺');
-                    } catch (_) { reply('❌ *Mute nahi hua!*'); }
-                    break;
-                }
-
-                case 'unmute': {
-                    if (!isSenderAdmin) return reply(NOT_ADMIN);
-                    if (!isBotAdmin)    return reply(BOT_NO_ADM);
-                    try {
-                        await sock.groupSettingUpdate(from, 'not_announcement');
-                        reply('🔊 *Group Unmute ho gaya!* Sab likh sakte hain.\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺');
-                    } catch (_) { reply('❌ *Unmute nahi hua!*'); }
-                    break;
-                }
-
-                // ── ADMIN: WARNINGS
-                case 'warnings': {
-                    if (!isGroup) return reply('❌ *Sirf group mein kaam karta hai.*');
-                    const targetJid = quoted || (args[0] ? normalizeNumber(args[0]) + '@s.whatsapp.net' : sender);
-                    const targetNum = targetJid.split('@')[0];
-                    const lw = getWarn(from, targetJid, 'link');
-                    const aw = getWarn(from, targetJid, 'abuse');
-                    reply(
-                        `╔═══ ⚠️ *WARNINGS* ⚠️ ═══╗\n\n` +
-                        `*👤 User:* @${targetNum}\n\n` +
-                        `🔗 *Link warns:* ${lw}/3 ${'🟥'.repeat(lw)}${'⬜'.repeat(3-lw)}\n` +
-                        `🤬 *Abuse warns:* ${aw}/3 ${'🟥'.repeat(aw)}${'⬜'.repeat(3-aw)}\n\n` +
-                        `╚═══════════════════╝\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`
-                    );
-                    break;
-                }
-
-                // ── ADMIN: CLEARWARN
-                case 'clearwarn': {
-                    if (!isSenderAdmin) return reply(NOT_ADMIN);
-                    if (!isGroup) return reply('❌ *Sirf group mein kaam karta hai.*');
-                    const targetJid = quoted || (args[0] ? normalizeNumber(args[0]) + '@s.whatsapp.net' : null);
-                    if (!targetJid) return reply(`*📖 Usage:* \`.clearwarn 923001234567\` ya reply karo`);
-                    resetWarn(from, targetJid);
-                    await sock.sendMessage(from, {
-                        text    : `✅ *@${targetJid.split('@')[0]} ki saari warnings clear!* Fresh start! 🌟\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`,
-                        mentions: [targetJid]
-                    });
-                    break;
-                }
-
-                // ── USER: ADMIN LIST
-                case 'adminlist': {
-                    if (!isGroup) return reply('❌ *Sirf group mein kaam karta hai.*');
-                    const { meta, admins } = await getGroupInfo(from);
-                    let txt = `╔══ 👑 *ADMIN LIST* 👑 ══╗\n\n`;
-                    admins.forEach((a, i) => txt += `*${i+1}.* 👑 @${a.split('@')[0]}\n`);
-                    txt += `\n*Total: ${admins.length} admins*\n╚═══════════════════╝`;
-                    await sock.sendMessage(from, { text: txt, mentions: admins });
-                    break;
-                }
-
-                // ── USER: MEMBERS
-                case 'members': {
-                    if (!isGroup) return reply('❌ *Sirf group mein kaam karta hai.*');
-                    const { meta } = await getGroupInfo(from);
-                    reply(
-                        `╔══ 👥 *GROUP INFO* ══╗\n\n` +
-                        `*📛 Name:* ${meta.subject}\n` +
-                        `*👥 Members:* ${meta.participants.length}\n` +
-                        `*👑 Admins:* ${meta.participants.filter(p => p.admin).length}\n` +
-                        `*📅 Created:* ${new Date(meta.creation * 1000).toLocaleDateString('en-PK')}\n\n` +
-                        `╚═══════════════════╝\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`
-                    );
-                    break;
-                }
-
-                // ── NUMBER LOOKUP
-                case 'n': {
-                    if (!args.length) return reply(`❌ *Usage:* \`.n 03338872681\``);
-                    await reply('🔍 *Searching...*');
-                    reply(await lookupNumber(args[0]));
-                    break;
-                }
-
-                // ── AI
-                case 'ai': {
-                    if (!args.length) return reply(`❌ *Sawal toh likh bhai!*\n*Usage:* \`.ai <sawal>\``);
-                    await reply('🧠 *𝐒𝐨𝐜𝐡 𝐫𝐚𝐡𝐚 𝐡𝐮...*');
-                    const res = await getAI(
-                        `Tera owner "𝐈𝐭𝐱 𝐑𝐎𝐌𝐄𝐎" hai. Sawal: "${args.join(' ')}". Roman Urdu me short aur bold format me jawab de.`
-                    );
-                    reply(`${res}\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`);
-                    break;
-                }
-
-                case 'roast': {
-                    await reply('🔥 *Roasting in progress...*');
-                    const target = quoted ? `@${quoted.split('@')[0]}` : 'is banda ya bandi';
-                    const res    = await getAI(
-                        `Ek khatarnak Roman Urdu roast likho ${target} ke liye. Sirf 2-3 lines. Street style. Emojis zaroor lagao.`, 0.9
-                    );
-                    await sock.sendMessage(from, { text: `${res}\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`, mentions: quoted ? [quoted] : [] }, { quoted: msg });
-                    break;
-                }
-
-                case 'joke': {
-                    await reply('😂 *Joke loading...*');
-                    reply(await getAI(`Ek funny Roman Urdu joke sunao. Sirf 2-3 lines. Emojis lazmi.`, 0.9) + '\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺');
-                    break;
-                }
-
-                case 'quote': {
-                    await reply('💭 *Soch raha hun...*');
-                    reply(await getAI(`Ek powerful motivational quote Roman Urdu mein de. Bold format. Max 3 lines.`, 0.8) + '\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺');
-                    break;
-                }
-
-                case 'shayari': {
-                    await reply('🌹 *Shayari likh raha hun...*');
-                    reply(await getAI(`Ek romantic ya dard bhari Urdu shayari likho. 4 lines. Beautiful.`, 0.9) + '\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺');
-                    break;
-                }
-
-                // ── FUN: 8BALL
-                case '8ball': {
-                    if (!args.length) return reply(`*🎱 Usage:* \`.8ball kya mai pass hounga?\``);
-                    const ans = EIGHT_BALL[Math.floor(Math.random() * EIGHT_BALL.length)];
-                    reply(`*🎱 Magic 8-Ball*\n\n*❓ Sawal:* ${args.join(' ')}\n\n*🔮 Jawab:* ${ans}\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`);
-                    break;
-                }
-
-                // ── FUN: TOSS
-                case 'toss': {
-                    const res = Math.random() > 0.5 ? '🪙 *HEADS!*' : '🪙 *TAILS!*';
-                    reply(`*🪙 Coin Toss*\n\n${res}\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`);
-                    break;
-                }
-
-                // ── FUN: DICE
-                case 'dice': {
-                    const num = Math.floor(Math.random() * 6) + 1;
-                    const faces = ['', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣'];
-                    reply(`*🎲 Dice Roll*\n\n${faces[num]} *${num} aaya!*\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`);
-                    break;
-                }
-
-                // ── FUN: SHIP
-                case 'ship': {
-                    const target1 = quoted ? `@${quoted.split('@')[0]}` : (args[0] || 'Tum');
-                    const target2 = args[args.length - 1] !== args[0] ? args[args.length - 1] : 'Romeo';
-                    const pct     = Math.floor(Math.random() * 101);
-                    const hearts  = pct >= 70 ? '❤️❤️❤️' : pct >= 40 ? '💛💛' : '💔';
-                    reply(
-                        `*💘 SHIP METER*\n\n` +
-                        `${target1} + ${target2}\n\n` +
-                        `*${pct}%* ${hearts}\n` +
-                        `${'█'.repeat(Math.floor(pct/10))}${'░'.repeat(10 - Math.floor(pct/10))}\n\n` +
-                        `${pct >= 70 ? '🔥 Perfect match!' : pct >= 40 ? '😊 Theek hai!' : '💀 Bhai maafi maango!'}\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`
-                    );
-                    break;
-                }
-
-                // ── FUN: TRUTH
-                case 'truth': {
-                    const t = TRUTHS[Math.floor(Math.random() * TRUTHS.length)];
-                    reply(`*🫣 TRUTH*\n\n${t}\n\n_Sach bolna hoga!_ 😏\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`);
-                    break;
-                }
-
-                // ── FUN: DARE
-                case 'dare': {
-                    const d = DARES[Math.floor(Math.random() * DARES.length)];
-                    reply(`*😈 DARE*\n\n${d}\n\n_Karna toh hoga!_ 🔥\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`);
-                    break;
-                }
-
-                // ── FUN: RATE
-                case 'rate': {
-                    const subject = args.join(' ') || (quoted ? `@${quoted.split('@')[0]}` : 'Tum khud');
-                    const score   = Math.floor(Math.random() * 11);
-                    const bars    = '⭐'.repeat(score) + '☆'.repeat(10 - score);
-                    reply(`*⭐ RATE METER*\n\n*${subject}*\n\n${bars}\n*${score}/10*\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`);
-                    break;
-                }
-
-                // ── FUN: SLAP
-                case 'slap': {
-                    if (!quoted) return reply(`_Kisi ka reply karo pehle_ 😂`);
-                    const victim = `@${quoted.split('@')[0]}`;
-                    const senderNum = `@${sender.split('@')[0]}`;
-                    await sock.sendMessage(from, {
-                        text    : `👋 *${senderNum} ne ${victim} ko THAPPAR maar diya!* 😂💥\n\n_Auuu!_ 🤕\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`,
-                        mentions: [quoted, sender]
-                    }, { quoted: msg });
-                    break;
-                }
-
-                // ── FUN: HUG
-                case 'hug': {
-                    if (!quoted) return reply(`_Kisi ka reply karo pehle_ 🤗`);
-                    const target = `@${quoted.split('@')[0]}`;
-                    const sndr   = `@${sender.split('@')[0]}`;
-                    await sock.sendMessage(from, {
-                        text    : `🤗 *${sndr} ne ${target} ko hug diya!* Kitna pyaara! 💕\n\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`,
-                        mentions: [quoted, sender]
-                    }, { quoted: msg });
-                    break;
-                }
-
-                // ── UTILS: PING
-                case 'ping': {
-                    const latency = Math.abs(Date.now() - msg.messageTimestamp * 1000);
-                    const up = process.uptime();
-                    const h  = Math.floor(up / 3600);
-                    const mn = Math.floor((up % 3600) / 60);
-                    const s  = Math.floor(up % 60);
-                    const speed = latency < 100 ? '🟢 Fast' : latency < 500 ? '🟡 Medium' : '🔴 Slow';
-                    reply(
-                        `╔══ 🏓 *PING* 🏓 ══╗\n\n` +
-                        `*⚡ Latency:* ${latency}ms ${speed}\n` +
-                        `*⏱️ Uptime:* ${h}h ${mn}m ${s}s\n` +
-                        `*🚀 Status:* Online ✅\n\n` +
-                        `╚═════════════════╝\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`
-                    );
-                    break;
-                }
-
-                // ── UTILS: INFO
-                case 'info':
-                    reply(
-                        `╔══ 🤖 *BOT INFO* 🤖 ══╗\n\n` +
-                        `*👨‍💻 Creator:* 𝐈𝐭𝐱 𝐑𝐎𝐌𝐄𝐎\n` +
-                        `*🚀 Version:* 3.0.0 (Uchiha Pro)\n` +
-                        `*🧠 AI:* Grok (${GROK_MODEL})\n` +
-                        `*🔍 Lookup:* SIM Data API\n` +
-                        `*🛡️ AutoMod:* Links + Abuse\n` +
-                        `*⚡ System:* Running Smooth\n\n` +
-                        `╚═════════════════════╝\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`
-                    );
-                    break;
-
-                // ── MENU
-                case 'menu':
-                case 'help':
-                    reply(
-                        `╔═══════════════════════╗\n` +
-                        `║  🤖 *𝐈𝐓𝐗 𝐑𝐎𝐌𝐄𝐎 𝐌𝐄𝐍𝐔*  ║\n` +
-                        `╚═══════════════════════╝\n\n` +
-
-                        `*🧠 AI COMMANDS*\n` +
-                        `┣ *.ai* [sawal] — AI se poochho\n` +
-                        `┣ *.roast* — Kisi ko roast karo\n` +
-                        `┣ *.joke* — Funny joke\n` +
-                        `┣ *.quote* — Motivational quote\n` +
-                        `┗ *.shayari* — Dil se shayari\n\n` +
-
-                        `*🎮 FUN COMMANDS*\n` +
-                        `┣ *.8ball* [sawal] — Magic 8 ball\n` +
-                        `┣ *.toss* — Heads ya tails\n` +
-                        `┣ *.dice* — Dice roll (1-6)\n` +
-                        `┣ *.ship* — Love meter\n` +
-                        `┣ *.truth* — Sach bolna hoga\n` +
-                        `┣ *.dare* — Dare karo\n` +
-                        `┣ *.rate* [cheez] — Rate karo\n` +
-                        `┣ *.slap* — Thappar maar do\n` +
-                        `┗ *.hug* — Pyaar se hug karo\n\n` +
-
-                        `*🔍 LOOKUP*\n` +
-                        `┗ *.n* [number] — SIM info\n\n` +
-
-                        `*📊 GROUP INFO*\n` +
-                        `┣ *.adminlist* — Admins ki list\n` +
-                        `┗ *.members* — Group info\n\n` +
-
-                        `*🛡️ WARNINGS (Auto-Mod)*\n` +
-                        `┣ *.warnings* [reply/@user]\n` +
-                        `┗ *.clearwarn* [reply/@user] 👑\n\n` +
-
-                        `*👑 ADMIN ONLY*\n` +
-                        `┣ *.tagall* [message]\n` +
-                        `┣ *.kick* [number/reply]\n` +
-                        `┣ *.kickall* — Sabko kick karo\n` +
-                        `┣ *.add* [number] — Add karo\n` +
-                        `┣ *.promote* [reply/@user]\n` +
-                        `┣ *.demote* [reply/@user]\n` +
-                        `┣ *.mute* — Group band karo\n` +
-                        `┗ *.unmute* — Group kholo\n\n` +
-
-                        `*⚡ UTILS*\n` +
-                        `┣ *.ping* — Bot speed check\n` +
-                        `┗ *.info* — Bot info\n\n` +
-
-                        `╚═══════════════════════╝\n` +
-                        `_👑 Admin commands sirf admins ke liye_\n— 𝕴𝖙𝖝 𝕽𝕺𝕸𝕰𝕺`
-                    );
-                    break;
-            }
-
-        } catch (e) { console.error('MSG Error:', e.message); }
-    });
+  });
 }
 
-// ═══════════════════════════════════════════════
-// 🚀 BOOT
-// ═══════════════════════════════════════════════
-if (!fs.existsSync('./public')) fs.mkdirSync('./public', { recursive: true });
+// ── Boot
 startBot();
